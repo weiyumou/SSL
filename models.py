@@ -2,9 +2,9 @@ import torch.nn as nn
 import torch.optim as optim
 
 
-class VGGBasicBlock(nn.Module):
+class VGGBlock(nn.Module):
     def __init__(self, num_conv_layers, num_in_channels, num_out_channels):
-        super(VGGBasicBlock, self).__init__()
+        super(VGGBlock, self).__init__()
         self.layers = [nn.Conv2d(in_channels=num_in_channels,
                                  out_channels=num_out_channels,
                                  kernel_size=3, stride=1, padding=1, bias=False),
@@ -38,9 +38,6 @@ class Downsampler(nn.Module):
     def __init__(self, num_in_channels, num_out_channels, fmap_h, fmap_w):
         super(Downsampler, self).__init__()
 
-        self.fc = nn.Linear(in_features=fmap_h * fmap_w // 4,
-                            out_features=fmap_h * fmap_w // 4)
-
         # self.conv1x1 = nn.Conv2d(in_channels=num_out_channels,
         #                          out_channels=num_in_channels,
         #                          kernel_size=1, stride=1, padding=0)
@@ -52,6 +49,9 @@ class Downsampler(nn.Module):
             nn.BatchNorm2d(num_features=num_in_channels),
             nn.ReLU()
         )
+
+        self.fc = nn.Linear(in_features=fmap_h * fmap_w // 4,
+                            out_features=fmap_h * fmap_w // 4)
 
         self._initialize_weights()
 
@@ -114,14 +114,14 @@ class VGGClassifier(nn.Module):
 def build_VGG(fmap_h, fmap_w):
     num_in_channels, num_out_channels = 3, 64
     num_conv_layers = [2, 2, 3, 3, 3]
-    vgg_blocks = [VGGBasicBlock(num_conv_layers[0], num_in_channels, num_out_channels)]
+    vgg_blocks = [VGGBlock(num_conv_layers[0], num_in_channels, num_out_channels)]
     downsamplers = [Downsampler(num_in_channels, num_out_channels, fmap_h, fmap_w)]
 
     num_in_channels, num_out_channels = 64, 128
     for idx in range(1, len(num_conv_layers)):
         fmap_h //= 2
         fmap_w //= 2
-        vgg_blocks.append(VGGBasicBlock(num_conv_layers[idx], num_in_channels, num_out_channels))
+        vgg_blocks.append(VGGBlock(num_conv_layers[idx], num_in_channels, num_out_channels))
         downsamplers.append(Downsampler(num_in_channels, num_out_channels, fmap_h, fmap_w))
         num_in_channels, num_out_channels = num_out_channels, min(512, num_out_channels * 2)
 

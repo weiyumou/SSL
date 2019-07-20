@@ -4,7 +4,7 @@ import torch.nn as nn
 
 
 def evaluate_classifier(device, model, eval_loader):
-    model.eval().to(device)
+    model = model.to(device).eval()
     criterion = nn.CrossEntropyLoss()
 
     corrects = 0
