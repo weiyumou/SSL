@@ -7,13 +7,13 @@ class VGGBasicBlock(nn.Module):
         super(VGGBasicBlock, self).__init__()
         self.layers = [nn.Conv2d(in_channels=num_in_channels,
                                  out_channels=num_out_channels,
-                                 kernel_size=3, stride=1, padding=1),
+                                 kernel_size=3, stride=1, padding=1, bias=False),
                        nn.BatchNorm2d(num_features=num_out_channels),
                        nn.ReLU()]
         for idx in range(num_conv_layers - 1):
             self.layers.extend([nn.Conv2d(in_channels=num_out_channels,
                                           out_channels=num_out_channels,
-                                          kernel_size=3, stride=1, padding=1),
+                                          kernel_size=3, stride=1, padding=1, bias=False),
                                 nn.BatchNorm2d(num_features=num_out_channels),
                                 nn.ReLU()])
         self.layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
@@ -41,16 +41,31 @@ class Downsampler(nn.Module):
         self.fc = nn.Linear(in_features=fmap_h * fmap_w // 4,
                             out_features=fmap_h * fmap_w // 4)
 
-        self.conv1x1 = nn.Conv2d(in_channels=num_out_channels,
-                                 out_channels=num_in_channels,
-                                 kernel_size=1, stride=1, padding=0)
+        # self.conv1x1 = nn.Conv2d(in_channels=num_out_channels,
+        #                          out_channels=num_in_channels,
+        #                          kernel_size=1, stride=1, padding=0)
+
+        self.conv1x1 = nn.Sequential(
+            nn.Conv2d(in_channels=num_out_channels,
+                      out_channels=num_in_channels,
+                      kernel_size=1, stride=1, padding=0, bias=False),
+            nn.BatchNorm2d(num_features=num_in_channels),
+            nn.ReLU()
+        )
+
         self._initialize_weights()
 
+    # def forward(self, x):
+    #     n, c, h, w = x.size()
+    #     fc_out = self.fc(x.reshape(n, c, -1))
+    #     conv_out = self.conv1x1(fc_out.reshape(n, c, h, w))
+    #     return conv_out
+
     def forward(self, x):
-        n, c, h, w = x.size()
-        fc_out = self.fc(x.reshape(n, c, -1))
-        conv_out = self.conv1x1(fc_out.reshape(n, c, h, w))
-        return conv_out
+        conv_out = self.conv1x1(x)
+        n, c, h, w = conv_out.size()
+        fc_out = self.fc(conv_out.reshape(n, c, -1))
+        return fc_out.reshape(n, c, h, w)
 
     def _initialize_weights(self):
         for m in self.modules():
