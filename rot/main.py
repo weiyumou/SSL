@@ -88,7 +88,7 @@ def main():
         torch.manual_seed(0)
         np.random.seed(0)
         torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        # torch.backends.cudnn.benchmark = False
 
     os.makedirs(args.model_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -144,10 +144,10 @@ def main():
         # avg_loss = running_loss / loss_total
 
         # data_iter = unlabeled_dataloaders["val"].__iter__()
-        # inputs, rotations = next(data_iter)
+        # inputs, rotations, perms = next(data_iter)
         # utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True))
         #
-        # inputs, labels = rot.train.random_rotate(inputs, args.num_patches, args.num_angles, rotations)
+        # inputs, labels = rot.train.random_rotate(inputs, args.num_patches, args.num_angles, rotations, perms)
         # utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True))
 
         model, best_val_accuracy = rot.train.ssl_train(device, model, unlabeled_dataloaders, args.ssl_num_epochs,

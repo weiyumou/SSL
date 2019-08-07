@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 import utils
 
 
-def random_rotate(images, num_patches, num_angles, rotations):
+def random_rotate(images, num_patches, num_angles, rotations, perms=None):
     n, c, img_h, img_w = images.size()
 
     labels = []
@@ -23,9 +23,9 @@ def random_rotate(images, num_patches, num_angles, rotations):
             patches[img_idx, :, :, :, patch_idx] = torch.rot90(patches[img_idx, :, :, :, patch_idx],
                                                                rotations[img_idx, patch_idx].item(), [1, 2])
         label = torch.zeros(num_patches, num_angles).scatter_(1, torch.unsqueeze(rotations[img_idx, :], 1), 1)
-        perm = torch.randperm(num_patches, dtype=torch.long)
-        patches[img_idx] = patches[img_idx, :, :, :, perm]
-        label = label[perm]
+        if perms is not None:
+            patches[img_idx] = patches[img_idx, :, :, :, perms[img_idx]]
+            label = label[perms[img_idx]]
         labels.append(label)
 
     patches = patches.reshape(n, -1, num_patches)
@@ -56,9 +56,9 @@ def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles):
             else:
                 model.eval()
 
-            for inputs, rotations in tqdm.tqdm(dataloaders[phase], desc=f"SSL {phase}"):
+            for inputs, rotations, perms in tqdm.tqdm(dataloaders[phase], desc=f"SSL {phase}"):
                 with torch.no_grad():
-                    inputs, labels = random_rotate(inputs, num_patches, num_angles, rotations)
+                    inputs, labels = random_rotate(inputs, num_patches, num_angles, rotations, perms)
                 inputs = inputs.to(device)
                 labels = labels.to(device)
 
