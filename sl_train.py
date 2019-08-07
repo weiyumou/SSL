@@ -84,8 +84,10 @@ def stl_sl_train(device, model, train_dataset, fold_indices, num_epochs,
 
         curr_model = copy.deepcopy(model)
         dataloaders = {
-            "train": DataLoader(Subset(train_dataset, train_indices), shuffle=True, batch_size=train_batch_size),
-            "val": DataLoader(Subset(train_dataset, val_indices), shuffle=False, batch_size=val_batch_size)
+            "train": DataLoader(Subset(train_dataset, train_indices), shuffle=True, batch_size=train_batch_size,
+                                pin_memory=True),
+            "val": DataLoader(Subset(train_dataset, val_indices), shuffle=False, batch_size=val_batch_size,
+                              pin_memory=True)
         }
         curr_model, accuracy = train_classifier(device, curr_model, dataloaders, num_epochs, num_classes)
         utils.logger.info(f"Trial {trial}: Val Accuracy = {accuracy}")

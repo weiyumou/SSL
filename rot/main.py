@@ -94,7 +94,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     input_transforms = transforms.Compose([transforms.ToTensor()])
 
-    model = rot.models.RotNet(args.num_patches, args.num_angles)
+    model = rot.models.RotResNet(args.num_patches, args.num_angles)
     model_name = args.model_name
 
     if args.do_ssl:
@@ -110,10 +110,11 @@ def main():
             "train": DataLoader(
                 rot.models.SSLTrainDataset(Subset(stl_unlabeled, train_indices), args.num_patches, args.num_angles),
                 shuffle=True,
-                batch_size=args.ssl_train_batch_size),
+                batch_size=args.ssl_train_batch_size,
+                pin_memory=True),
             "val": DataLoader(
                 rot.models.SSLValDataset(Subset(stl_unlabeled, val_indices), args.num_patches, args.num_angles),
-                shuffle=False, batch_size=args.ssl_val_batch_size)
+                shuffle=False, batch_size=args.ssl_val_batch_size, pin_memory=True)
         }
 
         # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{model_name}")))
@@ -142,7 +143,7 @@ def main():
         # accuracy = running_corrects / total
         # avg_loss = running_loss / loss_total
 
-        # data_iter = unlabeled_dataloaders["train"].__iter__()
+        # data_iter = unlabeled_dataloaders["val"].__iter__()
         # inputs, rotations = next(data_iter)
         # utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True))
         #
@@ -171,7 +172,7 @@ def main():
                                   split='test',
                                   transform=input_transforms,
                                   download=True)
-        test_dataloader = DataLoader(stl_test, shuffle=False, batch_size=args.test_batch_size)
+        test_dataloader = DataLoader(stl_test, shuffle=False, batch_size=args.test_batch_size, pin_memory=True)
 
         model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{model_name}")))
         model.init_classifier(num_classes)

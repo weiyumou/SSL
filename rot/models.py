@@ -4,27 +4,11 @@ import torchvision
 from torch.utils.data import Dataset
 
 
-class UnFlatten(nn.Module):
+class RotResNet(nn.Module):
 
     def __init__(self, num_patches, num_angles):
         super().__init__()
-        self.num_patches = num_patches
-        self.num_angles = num_angles
-
-    def forward(self, x):
-        return x.reshape(-1, self.num_patches, self.num_angles)
-
-
-class RotNet(nn.Module):
-
-    def __init__(self, num_patches, num_angles):
-        super().__init__()
-        self.backend = torchvision.models.resnet18()
-        self.backend.fc = nn.Sequential(
-            nn.Linear(in_features=self.backend.fc.in_features,
-                      out_features=num_patches * num_angles),
-            # UnFlatten(num_patches, num_angles)
-        )
+        self.backend = torchvision.models.resnet18(num_classes=num_patches * num_angles)
 
     def forward(self, x):
         return self.backend(x)

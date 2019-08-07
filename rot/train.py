@@ -13,7 +13,6 @@ import utils
 
 def random_rotate(images, num_patches, num_angles, rotations):
     n, c, img_h, img_w = images.size()
-    assert img_h == img_w
 
     labels = []
     patch_size = int(img_h / math.sqrt(num_patches))
@@ -22,9 +21,13 @@ def random_rotate(images, num_patches, num_angles, rotations):
     for img_idx in range(n):
         for patch_idx in range(num_patches):
             patches[img_idx, :, :, :, patch_idx] = torch.rot90(patches[img_idx, :, :, :, patch_idx],
-                                                               1 + rotations[img_idx, patch_idx].item(), [1, 2])
+                                                               rotations[img_idx, patch_idx].item(), [1, 2])
         label = torch.zeros(num_patches, num_angles).scatter_(1, torch.unsqueeze(rotations[img_idx, :], 1), 1)
+        perm = torch.randperm(num_patches, dtype=torch.long)
+        patches[img_idx] = patches[img_idx, :, :, :, perm]
+        label = label[perm]
         labels.append(label)
+
     patches = patches.reshape(n, -1, num_patches)
     images = F.fold(patches, output_size=img_h, kernel_size=patch_size, stride=patch_size)
     labels = torch.stack(labels)
@@ -32,7 +35,7 @@ def random_rotate(images, num_patches, num_angles, rotations):
 
 
 def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles):
-    model = model.to(device).train()
+    model = model.to(device)
     optimiser = optim.Adam(model.parameters())
     optimiser.zero_grad()
     criterion = nn.MultiLabelSoftMarginLoss()
