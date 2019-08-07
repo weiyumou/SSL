@@ -9,9 +9,7 @@ import torchvision.datasets as dset
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 
-import evaluation
-import models
-import train
+from fmap import models, train
 import utils
 
 
@@ -80,19 +78,21 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     input_transforms = transforms.Compose([transforms.ToTensor()])
 
-    stl_unlabeled = dset.STL10(root=args.data_dir,
-                               split='unlabeled',
-                               transform=input_transforms,
-                               download=True)
-    _, img_h, img_w = stl_unlabeled[0][0].size()
-    unlabeled_dataloder = DataLoader(stl_unlabeled, shuffle=False, batch_size=args.ssl_batch_size)
-    modules = models.build_VGG(img_h, img_w)
-
+    modules = None
     if args.do_ssl:
+        stl_unlabeled = dset.STL10(root=args.data_dir,
+                                   split='unlabeled',
+                                   transform=input_transforms,
+                                   download=True)
+        unlabeled_dataloader = DataLoader(stl_unlabeled, shuffle=False, batch_size=args.ssl_batch_size)
+
+        _, img_h, img_w = stl_unlabeled[0][0].size()
+        modules = models.build_VGG(img_h, img_w)
+
         for index, (block, downsampler) in enumerate(zip(modules["blocks"], modules["downsamplers"])):
             preprocess = nn.Sequential(*modules["blocks"][:index])
             modules["blocks"][index], modules["downsamplers"][index] = \
-                train.ssl_train(device, block, downsampler, unlabeled_dataloder, args.ssl_epochs, preprocess)
+                train.ssl_train(device, block, downsampler, unlabeled_dataloader, args.ssl_epochs, preprocess)
             torch.save(modules["blocks"][index].state_dict(), os.path.join(args.model_dir, f"block{index}.pt"))
             torch.save(modules["downsamplers"][index].state_dict(),
                        os.path.join(args.model_dir, f"downsampler{index}.pt"))
@@ -105,7 +105,7 @@ def main():
                                download=True)
 
         num_classes = len(stl_train.classes)
-        fold_indices = utils.get_train_folds(os.path.join(args.data_dir, "stl10_binary/fold_indices.txt"))
+        fold_indices = utils.stl_get_train_folds(os.path.join(args.data_dir, "stl10_binary/fold_indices.txt"))
 
         stl_test = dset.STL10(root=args.data_dir,
                               split='test',
@@ -117,6 +117,9 @@ def main():
         #     block.load_state_dict(torch.load(os.path.join(args.model_dir, f"block{index}.pt")))
         #     downsampler.load_state_dict(torch.load(os.path.join(args.model_dir, f"downsampler{index}.pt")))
 
+        if modules is None:
+            _, img_h, img_w = stl_train[0][0].size()
+            modules = models.build_VGG(img_h, img_w)
         modules["classifier"] = models.VGGClassifier(args.hidden_size, num_classes)
 
         avg_test_accuracy = train.sl_train(device, stl_train, fold_indices, modules, args.sl_epochs,

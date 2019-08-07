@@ -5,23 +5,26 @@ import torch.optim as optim
 class VGGBlock(nn.Module):
     def __init__(self, num_conv_layers, num_in_channels, num_out_channels):
         super(VGGBlock, self).__init__()
-        self.layers = [nn.Conv2d(in_channels=num_in_channels,
-                                 out_channels=num_out_channels,
-                                 kernel_size=3, stride=1, padding=1, bias=False),
-                       nn.BatchNorm2d(num_features=num_out_channels),
-                       nn.ReLU()]
+        layers = [nn.Conv2d(in_channels=num_in_channels,
+                            out_channels=num_out_channels,
+                            kernel_size=3, stride=1, padding=1, bias=False),
+                  nn.BatchNorm2d(num_features=num_out_channels),
+                  nn.ReLU()]
         for idx in range(num_conv_layers - 1):
-            self.layers.extend([nn.Conv2d(in_channels=num_out_channels,
-                                          out_channels=num_out_channels,
-                                          kernel_size=3, stride=1, padding=1, bias=False),
-                                nn.BatchNorm2d(num_features=num_out_channels),
-                                nn.ReLU()])
-        self.layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
-        self.layers = nn.Sequential(*self.layers)
+            layers.extend([nn.Conv2d(in_channels=num_out_channels,
+                                     out_channels=num_out_channels,
+                                     kernel_size=3, stride=1, padding=1, bias=False),
+                           nn.BatchNorm2d(num_features=num_out_channels),
+                           nn.ReLU()])
+        layers.append(nn.MaxPool2d(kernel_size=2, stride=2))
+        self.layers = nn.Sequential(*layers)
         self._initialize_weights()
 
     def forward(self, x):
-        return self.layers(x)
+        activations = [self.layers[0](x)]
+        for index in range(1, len(self.layers)):
+            activations.append(self.layers[index](activations[-1]))
+        return activations
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -38,10 +41,6 @@ class Downsampler(nn.Module):
     def __init__(self, num_in_channels, num_out_channels, fmap_h, fmap_w):
         super(Downsampler, self).__init__()
 
-        # self.conv1x1 = nn.Conv2d(in_channels=num_out_channels,
-        #                          out_channels=num_in_channels,
-        #                          kernel_size=1, stride=1, padding=0)
-
         self.conv1x1 = nn.Sequential(
             nn.Conv2d(in_channels=num_out_channels,
                       out_channels=num_in_channels,
@@ -56,16 +55,20 @@ class Downsampler(nn.Module):
         self._initialize_weights()
 
     # def forward(self, x):
-    #     n, c, h, w = x.size()
-    #     fc_out = self.fc(x.reshape(n, c, -1))
-    #     conv_out = self.conv1x1(fc_out.reshape(n, c, h, w))
-    #     return conv_out
+    #     conv_out = self.conv1x1(x)
+    #     n, c, h, w = conv_out.size()
+    #     fc_out = self.fc(conv_out.reshape(n, c, -1))
+    #     return fc_out.reshape(n, c, h, w)
 
     def forward(self, x):
-        conv_out = self.conv1x1(x)
+        activations = [self.conv1x1[0](x)]
+        for index in range(1, len(self.conv1x1)):
+            activations.append(self.conv1x1[index](activations[-1]))
+        conv_out = activations[-1]
         n, c, h, w = conv_out.size()
         fc_out = self.fc(conv_out.reshape(n, c, -1))
-        return fc_out.reshape(n, c, h, w)
+        activations.append(fc_out.reshape(n, c, h, w))
+        return activations
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -74,11 +77,11 @@ class Downsampler(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
+                nn.init.constant_(m.weight, 0.8)
+                nn.init.constant_(m.bias, -0.2)
+            # elif isinstance(m, nn.Linear):
+            #     nn.init.normal_(m.weight, 0, 0.01)
+            #     nn.init.constant_(m.bias, 0)
 
 
 class VGGClassifier(nn.Module):
