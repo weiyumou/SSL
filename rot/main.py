@@ -94,7 +94,9 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     input_transforms = transforms.Compose([transforms.ToTensor()])
 
-    model = rot.models.RotResNet(args.num_patches, args.num_angles)
+    # model = rot.models.RotResNet(args.num_patches, args.num_angles)
+    # model = rot.models.RotAlexnet(args.num_patches, args.num_angles)
+    model = rot.models.RotResNet50(args.num_patches, args.num_angles)
     model_name = args.model_name
 
     if args.do_ssl:
@@ -147,8 +149,14 @@ def main():
         # inputs, rotations, perms = next(data_iter)
         # utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True))
         #
-        # inputs, labels = rot.train.random_rotate(inputs, args.num_patches, args.num_angles, rotations, perms)
+        # inputs, labels = rot.train.random_rotate(inputs, args.num_patches, args.num_angles, rotations)
         # utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True))
+        #
+        # inputs = inputs.to(device)
+        # with torch.no_grad():
+        #     outputs = model(inputs)
+        #     outputs = outputs.reshape(-1, args.num_patches, args.num_angles)
+        #     preds = torch.argmax(outputs, dim=2)
 
         model, best_val_accuracy = rot.train.ssl_train(device, model, unlabeled_dataloaders, args.ssl_num_epochs,
                                                        args.num_patches, args.num_angles)
