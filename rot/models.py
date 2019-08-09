@@ -17,15 +17,22 @@ class RotResNet18(nn.Module):
 
         self.backend = torchvision.models.resnet18()
         self.backend.avgpool = nn.AdaptiveAvgPool2d(output_size=3)
-        self.backend.fc = nn.Sequential()
-        self.fc = nn.Linear(in_features=512 * 3 * 3, out_features=num_patches * num_angles)
+        self.backend.fc = nn.Identity()
+        self.fc = nn.Sequential(
+            Flatten(),
+            nn.Linear(in_features=512 * 3 * 3, out_features=num_patches * num_angles)
+        )
 
     def forward(self, x):
-        backend_out = self.backend(x)
-        return self.fc(torch.flatten(backend_out, start_dim=1))
+        for _, layer in self.backend.named_children():
+            x = layer(x)
+        return self.fc(x)
 
     def init_classifier(self, num_classes):
-        self.fc = nn.Linear(in_features=self.fc.in_features, out_features=num_classes)
+        self.fc = nn.Sequential(
+            Flatten(),
+            nn.Linear(in_features=self.fc[-1].in_features, out_features=num_classes)
+        )
 
 
 class RotResNet50(nn.Module):
@@ -35,9 +42,9 @@ class RotResNet50(nn.Module):
 
         self.backend = torchvision.models.resnet50()
         self.backend.avgpool = nn.AdaptiveAvgPool2d(output_size=3)
-        self.backend.add_module("flatten", Flatten())
-        self.backend.fc = nn.Sequential()
+        self.backend.fc = nn.Identity()
         self.fc = nn.Sequential(
+            Flatten(),
             nn.Linear(in_features=2048 * 3 * 3, out_features=num_patches * num_angles)
         )
 
@@ -47,8 +54,10 @@ class RotResNet50(nn.Module):
         return self.fc(x)
 
     def init_classifier(self, num_classes):
-        self.backend.avgpool = nn.AdaptiveAvgPool2d(output_size=1)
-        self.fc = nn.Linear(in_features=2048, out_features=num_classes)
+        self.fc = nn.Sequential(
+            Flatten(),
+            nn.Linear(in_features=self.fc[-1].in_features, out_features=num_classes)
+        )
 
 
 class RotAlexnet(nn.Module):
@@ -74,16 +83,79 @@ class RotSiamResnet18(nn.Module):
         super().__init__()
 
         self.backend = torchvision.models.resnet18()
-        self.backend.avgpool = nn.AdaptiveAvgPool2d(output_size=3)
         self.backend.fc = nn.Sequential()
-        self.fc = nn.Linear(in_features=512 * 3 * 3, out_features=num_patches * num_angles)
+        self.fc = nn.Sequential(
+            nn.Linear(in_features=512 * num_patches, out_features=1024),
+            nn.ReLU(),
+            nn.Linear(in_features=1024, out_features=num_patches * num_angles)
+        )
 
     def forward(self, x):
-        backend_out = self.backend(x)
-        return self.fc(torch.flatten(backend_out, start_dim=1))
+        n, c, h, w, _ = x.size()
+        x = x.reshape(-1, c, h, w)
+        for _, layer in self.backend.named_children():
+            x = layer(x)
+        x = x.reshape(n, -1)
+        return self.fc(x)
 
     def init_classifier(self, num_classes):
-        self.fc = nn.Linear(in_features=self.fc.in_features, out_features=num_classes)
+        self.fc = nn.Linear(in_features=512, out_features=num_classes)
+
+
+class RotAlexnetBN(nn.Module):
+
+    def __init__(self, num_patches, num_angles):
+        super().__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=(11, 11), stride=(4, 4), padding=(2, 2), bias=False),
+            nn.BatchNorm2d(num_features=64),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2)
+        )
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(64, 192, kernel_size=(5, 5), padding=(2, 2), bias=False),
+            nn.BatchNorm2d(num_features=192),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2)
+        )
+        self.conv3 = nn.Sequential(
+            nn.Conv2d(192, 384, kernel_size=(3, 3), padding=(1, 1), bias=False),
+            nn.BatchNorm2d(num_features=384),
+            nn.ReLU()
+        )
+        self.conv4 = nn.Sequential(
+            nn.Conv2d(384, 256, kernel_size=(3, 3), padding=(1, 1), bias=False),
+            nn.BatchNorm2d(num_features=256),
+            nn.ReLU()
+        )
+        self.conv5 = nn.Sequential(
+            nn.Conv2d(256, 256, kernel_size=(3, 3), padding=(1, 1), bias=False),
+            nn.BatchNorm2d(num_features=256),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=3, stride=2)
+        )
+        self.avgpool = nn.AdaptiveAvgPool2d(output_size=(6, 6))
+        self.fc = nn.Sequential(
+            Flatten(),
+            # nn.Dropout(p=0.5),
+            # nn.Linear(in_features=256 * 6 * 6, out_features=4096),
+            # nn.ReLU(),
+            # nn.Dropout(p=0.5),
+            # nn.Linear(in_features=4096, out_features=4096),
+            # nn.ReLU(),
+            nn.Linear(in_features=256 * 6 * 6, out_features=num_patches * num_angles)
+        )
+
+    def forward(self, x):
+        for _, layer in self.named_children():
+            x = layer(x)
+        return x
+
+    def init_classifier(self, num_classes):
+        self.fc = nn.Sequential(
+            Flatten(),
+            nn.Linear(in_features=256 * 6 * 6, out_features=num_classes)
+        )
 
 
 class SSLTrainDataset(Dataset):

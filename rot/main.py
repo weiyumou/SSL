@@ -94,9 +94,10 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     input_transforms = transforms.Compose([transforms.ToTensor()])
 
-    # model = rot.models.RotResNet(args.num_patches, args.num_angles)
-    # model = rot.models.RotAlexnet(args.num_patches, args.num_angles)
-    model = rot.models.RotResNet50(args.num_patches, args.num_angles)
+    model = rot.models.RotResNet18(args.num_patches, args.num_angles)
+    # model = rot.models.RotAlexnetBN(args.num_patches, args.num_angles)
+    # model = rot.models.RotResNet50(args.num_patches, args.num_angles)
+    # model = rot.models.RotSiamResnet18(args.num_patches, args.num_angles)
     model_name = args.model_name
 
     if args.do_ssl:
