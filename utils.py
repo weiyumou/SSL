@@ -20,8 +20,7 @@ def show(img, mean, std):
 
     num_channels, *_ = img.size()
     npimg = img.detach().cpu().numpy()
-    for c in range(num_channels):
-        npimg[c, :, :] = npimg[c, :, :] * std[c] + mean[c]
+    npimg = denormalise(npimg, mean, std, batched=False)
 
     if num_channels == 1:
         plt.imshow(npimg, cmap="Greys")
@@ -50,3 +49,11 @@ def calc_images_mean_std(dataloader, num_channels=3):
     mean = first_moment
     std = torch.sqrt(sec_moment - first_moment ** 2)
     return mean, std
+
+
+def denormalise(images, mean, std, batched=True):
+    num_channels = images.shape[1] if batched else images.shape[0]
+    denom_images = torch.empty_like(images)
+    for c in range(num_channels):
+        denom_images[:, c, :, :] = images[:, c, :, :] * std[c] + mean[c]
+    return denom_images

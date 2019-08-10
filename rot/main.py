@@ -127,15 +127,15 @@ def main():
 
         # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{model_name}")))
 
-        data_iter = unlabeled_dataloaders["val"].__iter__()
-        inputs, rotations, perms = next(data_iter)
-        utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True), mean, std)
-
-        inputs, rotations = rot.train.random_rotate(inputs, args.num_patches, rotations, perms)
-        utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True), mean, std)
+        # data_iter = unlabeled_dataloaders["val"].__iter__()
+        # inputs, rotations, perms = next(data_iter)
+        # utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True), mean, std)
+        #
+        # inputs, rotations = rot.train.random_rotate(inputs, args.num_patches, rotations, perms)
+        # utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True), mean, std)
 
         model, best_val_accuracy = rot.train.ssl_train(device, model, unlabeled_dataloaders, args.ssl_num_epochs,
-                                                       args.num_patches, args.num_angles)
+                                                       args.num_patches, args.num_angles, mean, std)
         model_name = time.ctime().replace(" ", "_").replace(":", "_")
         model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
         torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))

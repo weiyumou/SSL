@@ -11,10 +11,9 @@ from torch.utils.tensorboard import SummaryWriter
 import utils
 
 
-def random_rotate(images, num_patches, num_angles, rotations, perms=None):
+def random_rotate(images, num_patches, rotations, perms=None):
     n, c, img_h, img_w = images.size()
 
-    labels = []
     patch_size = int(img_h / math.sqrt(num_patches))
     patches = F.unfold(images, kernel_size=patch_size, stride=patch_size)
     patches = patches.reshape(n, c, patch_size, patch_size, num_patches)
@@ -22,27 +21,24 @@ def random_rotate(images, num_patches, num_angles, rotations, perms=None):
         for patch_idx in range(num_patches):
             patches[img_idx, :, :, :, patch_idx] = torch.rot90(patches[img_idx, :, :, :, patch_idx],
                                                                rotations[img_idx, patch_idx].item(), [1, 2])
-        label = torch.zeros(num_patches, num_angles).scatter_(1, torch.unsqueeze(rotations[img_idx, :], 1), 1)
         if perms is not None:
             patches[img_idx] = patches[img_idx, :, :, :, perms[img_idx]]
-            label = label[perms[img_idx]]
-        labels.append(label)
+            rotations[img_idx] = rotations[img_idx, perms[img_idx]]
 
     patches = patches.reshape(n, -1, num_patches)
     images = F.fold(patches, output_size=img_h, kernel_size=patch_size, stride=patch_size)
-    labels = torch.stack(labels)
-    return images, labels
+    return images, torch.flatten(rotations)
 
 
-def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles):
+def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles, mean, std):
     model = model.to(device)
     optimiser = optim.Adam(model.parameters())
     optimiser.zero_grad()
-    criterion = nn.MultiLabelSoftMarginLoss()
+    criterion = nn.CrossEntropyLoss()
     writer = SummaryWriter()
 
     best_model_wts = copy.deepcopy(model.state_dict())
-    best_val_accuracy = 1 / (num_patches * num_angles)
+    best_val_accuracy = 1 / num_angles
 
     for epoch in range(num_epochs):
         for phase in ["train", "val"]:
@@ -58,27 +54,26 @@ def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles):
 
             for inputs, rotations, perms in tqdm.tqdm(dataloaders[phase], desc=f"SSL {phase}"):
                 with torch.no_grad():
-                    inputs, labels = random_rotate(inputs, num_patches, num_angles, rotations, perms)
+                    inputs, labels = random_rotate(inputs, num_patches, rotations, perms)
                 inputs = inputs.to(device)
                 labels = labels.to(device)
 
                 with torch.set_grad_enabled(phase == "train"):
                     outputs = model(inputs)
-                    loss = criterion(outputs, labels.reshape(labels.size(0), -1))
+                    outputs = outputs.reshape(-1, num_angles)
+                    loss = criterion(outputs, labels)
 
                 if phase == "train":
                     loss.backward()
                     optimiser.step()
                     optimiser.zero_grad()
                 else:
-                    outputs = outputs.reshape(-1, num_patches, num_angles)
-                    preds = torch.argmax(outputs, dim=2)
-                    labels = torch.argmax(labels, dim=2)
+                    preds = torch.argmax(outputs, dim=1)
                     running_corrects += torch.sum(preds == labels).item()
                     accuracy_total += labels.numel()
 
-                running_loss += loss.item() * inputs.size(0)
-                loss_total += inputs.size(0)
+                running_loss += loss.item() * labels.numel()
+                loss_total += labels.numel()
 
             epoch_loss = running_loss / loss_total
             utils.logger.info(f"Epoch {epoch}: {phase} loss = {epoch_loss}")
@@ -93,4 +88,5 @@ def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles):
                 writer.add_scalar(f"{phase}_accuracy", epoch_accuracy, epoch)
 
     model.load_state_dict(best_model_wts)
+    writer.close()
     return model, best_val_accuracy
