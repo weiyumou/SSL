@@ -16,6 +16,10 @@ import sl_train
 import utils
 import torchvision
 
+# mean and std for STL-10 Unlabeled train split
+mean = (0.4226, 0.4120, 0.3636)
+std = (0.2615, 0.2545, 0.2571)
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description='SSL')
@@ -92,7 +96,8 @@ def main():
 
     os.makedirs(args.model_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    input_transforms = transforms.Compose([transforms.ToTensor()])
+    input_transforms = transforms.Compose([transforms.ToTensor(),
+                                           transforms.Normalize(mean, std)])
 
     model = rot.models.RotResNet18(args.num_patches, args.num_angles)
     # model = rot.models.RotAlexnetBN(args.num_patches, args.num_angles)
@@ -121,43 +126,13 @@ def main():
         }
 
         # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{model_name}")))
-        # model = model.to(device).eval()
-        # running_corrects = 0
-        # total = 0
-        # running_loss = 0
-        # loss_total = 0
-        # criterion = nn.BCEWithLogitsLoss()
-        # for inputs, rotations in unlabeled_dataloaders["val"]:
-        #     inputs, labels = rot.train.random_rotate(inputs, args.num_patches, args.num_angles, rotations)
-        #     inputs = inputs.to(device)
-        #     labels = labels.to(device)
-        #
-        #     with torch.no_grad():
-        #         outputs = model(inputs)
-        #         loss = criterion(outputs, labels)
-        #
-        #     preds = torch.argmax(outputs, dim=2)
-        #     labels = torch.argmax(labels, dim=2)
-        #     running_corrects += torch.sum(preds == labels).item()
-        #     total += labels.numel()
-        #     running_loss += loss.item() * inputs.size(0) * args.num_patches * args.num_angles
-        #     loss_total += inputs.size(0) * args.num_patches * args.num_angles
-        #
-        # accuracy = running_corrects / total
-        # avg_loss = running_loss / loss_total
 
-        # data_iter = unlabeled_dataloaders["val"].__iter__()
-        # inputs, rotations, perms = next(data_iter)
-        # utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True))
-        #
-        # inputs, labels = rot.train.random_rotate(inputs, args.num_patches, args.num_angles, rotations)
-        # utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True))
-        #
-        # inputs = inputs.to(device)
-        # with torch.no_grad():
-        #     outputs = model(inputs)
-        #     outputs = outputs.reshape(-1, args.num_patches, args.num_angles)
-        #     preds = torch.argmax(outputs, dim=2)
+        data_iter = unlabeled_dataloaders["val"].__iter__()
+        inputs, rotations, perms = next(data_iter)
+        utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True), mean, std)
+
+        inputs, rotations = rot.train.random_rotate(inputs, args.num_patches, rotations, perms)
+        utils.show(torchvision.utils.make_grid(inputs, nrow=4, normalize=True, scale_each=True), mean, std)
 
         model, best_val_accuracy = rot.train.ssl_train(device, model, unlabeled_dataloaders, args.ssl_num_epochs,
                                                        args.num_patches, args.num_angles)
