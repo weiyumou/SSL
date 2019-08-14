@@ -1,5 +1,6 @@
 import copy
 import math
+import queue
 
 import torch
 import torch.nn as nn
@@ -15,7 +16,7 @@ def random_rotate(images, num_patches, rotations, perms=None):
     n, c, img_h, img_w = images.size()
 
     patch_size = int(img_h / math.sqrt(num_patches))
-    patches = F.unfold(images, kernel_size=patch_size, stride=patch_size)
+    patches = F.unfold(images, kernel_size=(patch_size, patch_size), stride=(patch_size, patch_size))
     patches = patches.reshape(n, c, patch_size, patch_size, num_patches)
     for img_idx in range(n):
         for patch_idx in range(num_patches):
@@ -26,14 +27,13 @@ def random_rotate(images, num_patches, rotations, perms=None):
             rotations[img_idx] = rotations[img_idx, perms[img_idx]]
 
     patches = patches.reshape(n, -1, num_patches)
-    images = F.fold(patches, output_size=img_h, kernel_size=patch_size, stride=patch_size)
+    images = F.fold(patches, output_size=img_h, kernel_size=(patch_size, patch_size), stride=(patch_size, patch_size))
     return images, torch.flatten(rotations)
 
 
 def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles, mean, std):
     model = model.to(device)
     optimiser = optim.Adam(model.parameters())
-    optimiser.zero_grad()
     criterion = nn.CrossEntropyLoss()
     writer = SummaryWriter()
 
@@ -53,20 +53,22 @@ def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles, m
                 model.eval()
 
             for inputs, rotations, perms in tqdm.tqdm(dataloaders[phase], desc=f"SSL {phase}"):
+                # writer.add_images("Raw Inputs", utils.denormalise(inputs, mean, std), epoch)
                 with torch.no_grad():
                     inputs, labels = random_rotate(inputs, num_patches, rotations, perms)
                 inputs = inputs.to(device)
                 labels = labels.to(device)
 
+                # writer.add_images("Inputs", utils.denormalise(inputs, mean, std), epoch)
                 with torch.set_grad_enabled(phase == "train"):
                     outputs = model(inputs)
                     outputs = outputs.reshape(-1, num_angles)
                     loss = criterion(outputs, labels)
 
                 if phase == "train":
+                    optimiser.zero_grad()
                     loss.backward()
                     optimiser.step()
-                    optimiser.zero_grad()
                 else:
                     preds = torch.argmax(outputs, dim=1)
                     running_corrects += torch.sum(preds == labels).item()
@@ -90,3 +92,38 @@ def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles, m
     model.load_state_dict(best_model_wts)
     writer.close()
     return model, best_val_accuracy
+
+
+def retrieve_topk_images(device, model, query_img, dataloader, mean, std, k=16):
+    model = model.to(device).eval()
+
+    writer = SummaryWriter()
+    top_image_queue = queue.PriorityQueue(maxsize=k)
+    pdist = nn.PairwiseDistance()
+
+    if query_img.dim() == 3:
+        query_img = torch.unsqueeze(query_img, dim=0)
+    writer.add_images("Query Image", utils.denormalise(query_img, mean, std), 0)
+
+    with torch.no_grad():
+        query_vec = model.backend(query_img.to(device))
+        for images, labels in dataloader:
+            fvecs = model.backend(images.to(device))
+            dists = pdist(query_vec, fvecs).tolist()
+            for idx, dist in enumerate(dists):
+                if top_image_queue.full():
+                    last_item = top_image_queue.get()
+                    if -dist > last_item[0]:
+                        top_image_queue.put((-dist, (images[idx], labels[idx].item())))
+                else:
+                    top_image_queue.put((-dist, (images[idx], labels[idx].item())))
+
+    top_images, top_labels = [], []
+    while not top_image_queue.empty():
+        _, (image, label) = top_image_queue.get()
+        top_images.append(image)
+        top_labels.append(label)
+    top_images = torch.cat(tuple(reversed(top_images)), dim=0)
+    top_labels = torch.cat(tuple(reversed(top_labels)), dim=0)
+    writer.add_images("Top Images", utils.denormalise(top_images, mean, std), 0)
+    writer.close()

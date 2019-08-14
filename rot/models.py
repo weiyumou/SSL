@@ -16,18 +16,14 @@ class RotResNet18(nn.Module):
         super().__init__()
 
         self.backend = torchvision.models.resnet18()
-        self.backend.avgpool = nn.AdaptiveAvgPool2d(output_size=3)
-        self.backend.fc = nn.Identity()
         self.fc = nn.Sequential(
             Flatten(),
-            nn.Linear(in_features=512 * 3 * 3, out_features=1024),
+            nn.Linear(in_features=self.backend.fc.in_features, out_features=1024),
             nn.BatchNorm1d(num_features=1024),
             nn.ReLU(),
-            nn.Linear(in_features=1024, out_features=512),
-            nn.BatchNorm1d(num_features=512),
-            nn.ReLU(),
-            nn.Linear(in_features=512, out_features=num_patches * num_angles)
+            nn.Linear(in_features=1024, out_features=num_patches * num_angles)
         )
+        self.backend.fc = nn.Sequential()
         self._initialize_weights()
 
     def forward(self, x):
@@ -35,11 +31,25 @@ class RotResNet18(nn.Module):
             x = layer(x)
         return self.fc(x)
 
-    def init_classifier(self, num_classes):
+    def get_feature_maps(self, x):
+        fmaps = {}
+        for name, layer in self.backend.named_children():
+            if "layer" in name:
+                fmaps[f"{name}_input"] = x
+            x = layer(x)
+        return fmaps
+
+    def init_classifier(self, num_classes, freeze_params=True):
+        if freeze_params:
+            for param in self.parameters():
+                param.requires_grad = False
+
         self.fc = nn.Sequential(
             Flatten(),
-            nn.Linear(in_features=512 * 3 * 3, out_features=num_classes)
+            nn.Linear(in_features=self.fc[1].in_features, out_features=num_classes)
         )
+        nn.init.normal_(self.fc.weight, 0, 0.01)
+        nn.init.constant_(self.fc.bias, 0)
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -61,12 +71,18 @@ class RotResNet50(nn.Module):
         super().__init__()
 
         self.backend = torchvision.models.resnet50()
-        self.backend.avgpool = nn.AdaptiveAvgPool2d(output_size=3)
         self.backend.fc = nn.Identity()
         self.fc = nn.Sequential(
             Flatten(),
-            nn.Linear(in_features=2048 * 3 * 3, out_features=num_patches * num_angles)
+            nn.Linear(in_features=2048, out_features=1024),
+            nn.BatchNorm1d(num_features=1024),
+            nn.ReLU(),
+            nn.Linear(in_features=1024, out_features=512),
+            nn.BatchNorm1d(num_features=512),
+            nn.ReLU(),
+            nn.Linear(in_features=512, out_features=num_patches * num_angles)
         )
+        self._initialize_weights()
 
     def forward(self, x):
         for _, layer in self.backend.named_children():
@@ -76,32 +92,21 @@ class RotResNet50(nn.Module):
     def init_classifier(self, num_classes):
         self.fc = nn.Sequential(
             Flatten(),
-            nn.Linear(in_features=self.fc[-1].in_features, out_features=num_classes)
+            nn.Linear(in_features=2048, out_features=num_classes)
         )
 
-
-class RotSiamResnet18(nn.Module):
-    def __init__(self, num_patches, num_angles):
-        super().__init__()
-
-        self.backend = torchvision.models.resnet18()
-        self.backend.fc = nn.Sequential()
-        self.fc = nn.Sequential(
-            nn.Linear(in_features=512 * num_patches, out_features=1024),
-            nn.ReLU(),
-            nn.Linear(in_features=1024, out_features=num_patches * num_angles)
-        )
-
-    def forward(self, x):
-        n, c, h, w, _ = x.size()
-        x = x.reshape(-1, c, h, w)
-        for _, layer in self.backend.named_children():
-            x = layer(x)
-        x = x.reshape(n, -1)
-        return self.fc(x)
-
-    def init_classifier(self, num_classes):
-        self.fc = nn.Linear(in_features=512, out_features=num_classes)
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)
 
 
 class RotAlexnetBN(nn.Module):
@@ -159,6 +164,43 @@ class RotAlexnetBN(nn.Module):
             Flatten(),
             nn.Linear(in_features=256 * 6 * 6, out_features=num_classes)
         )
+
+    def _initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, 0, 0.01)
+                nn.init.constant_(m.bias, 0)
+
+
+class SimpleConv(nn.Module):
+
+    def __init__(self, num_patches, num_angles):
+        super().__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=8, stride=8),
+            nn.BatchNorm2d(num_features=64),
+            nn.ReLU()
+        )
+        self.pool1 = nn.AvgPool2d(kernel_size=4, stride=4)
+        self.fc = nn.Sequential(
+            Flatten(),
+            nn.Linear(in_features=64 * 3 * 3, out_features=256),
+            nn.ReLU(),
+            nn.Linear(in_features=256, out_features=num_patches * num_angles)
+        )
+        self._initialize_weights()
+
+    def forward(self, x):
+        for _, layer in self.named_children():
+            x = layer(x)
+        return x
 
     def _initialize_weights(self):
         for m in self.modules():

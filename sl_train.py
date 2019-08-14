@@ -6,18 +6,25 @@ import torch.nn as nn
 import torch.optim as optim
 import tqdm
 from torch.utils.data import DataLoader, Subset
+from torch.utils.tensorboard import SummaryWriter
 
 import utils
 
 
 def train_classifier(device, model, dataloaders, num_epochs, num_classes):
     model = model.to(device)
-    optimiser = optim.Adam(model.parameters())
-    optimiser.zero_grad()
+    params_to_update = []
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            params_to_update.append(param)
+            utils.logger.info(f"Param to update: {name}")
+
+    optimiser = optim.Adam(params_to_update)
     criterion = nn.CrossEntropyLoss()
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_accuracy = 1 / num_classes
+    writer = SummaryWriter()
 
     for epoch in range(num_epochs):
         running_loss = 0.0
@@ -27,13 +34,15 @@ def train_classifier(device, model, dataloaders, num_epochs, num_classes):
         for inputs, labels in tqdm.tqdm(dataloaders["train"], desc="SL Training"):
             inputs = inputs.to(device)
             labels = labels.to(device)
+
             outputs = model(inputs)
             loss = criterion(outputs, labels)
+            optimiser.zero_grad()
             loss.backward()
             optimiser.step()
-            optimiser.zero_grad()
-            running_loss += loss.item() * inputs.size(0)
-            total += inputs.size(0)
+
+            running_loss += loss.item() * labels.numel()
+            total += labels.numel()
 
         epoch_loss = running_loss / total
         utils.logger.info(f"Epoch {epoch}: Train Loss = {epoch_loss}")
@@ -46,7 +55,11 @@ def train_classifier(device, model, dataloaders, num_epochs, num_classes):
             best_model_wts = copy.deepcopy(model.state_dict())
             best_accuracy = eval_accuracy
 
+        writer.add_scalars("Loss", {"Train": epoch_loss, "Val": eval_loss}, epoch)
+        writer.add_scalar("Accuracy/Val", eval_accuracy, epoch)
+
     model.load_state_dict(best_model_wts)
+    writer.close()
     return model, best_accuracy
 
 
@@ -66,8 +79,8 @@ def evaluate_classifier(device, model, eval_loader):
             loss = criterion(outputs, labels)
         preds = torch.argmax(outputs, dim=1)
         corrects += torch.sum(preds == labels).item()
-        running_loss += loss.item() * inputs.size(0)
-        total += inputs.size(0)
+        running_loss += loss.item() * labels.numel()
+        total += labels.numel()
     accuracy = corrects / total
     eval_loss = running_loss / total
 
@@ -75,28 +88,27 @@ def evaluate_classifier(device, model, eval_loader):
 
 
 def stl_sl_train(device, model, train_dataset, fold_indices, num_epochs,
-                 train_batch_size, val_batch_size, num_classes, test_dataloader):
+                 train_batch_size, val_batch_size, num_classes, dataloaders):
     test_accuracy = 0.0
-    num_trials, num_examples = fold_indices.shape
-    for trial in range(num_trials):
-        train_indices = fold_indices[trial, :int(0.9 * num_examples)]
-        val_indices = fold_indices[trial, int(0.9 * num_examples):]
+    num_folds, num_examples = fold_indices.shape
+    for fold in range(num_folds):
+        train_indices = fold_indices[fold, :int(0.9 * num_examples)]
+        val_indices = fold_indices[fold, int(0.9 * num_examples):]
 
         curr_model = copy.deepcopy(model)
-        dataloaders = {
-            "train": DataLoader(Subset(train_dataset, train_indices), shuffle=True, batch_size=train_batch_size,
-                                pin_memory=True),
-            "val": DataLoader(Subset(train_dataset, val_indices), shuffle=False, batch_size=val_batch_size,
-                              pin_memory=True)
-        }
+        dataloaders["train"] = DataLoader(Subset(train_dataset, train_indices), shuffle=True,
+                                          batch_size=train_batch_size,
+                                          pin_memory=True)
+        dataloaders["val"] = DataLoader(Subset(train_dataset, val_indices), shuffle=False, batch_size=val_batch_size,
+                                        pin_memory=True)
         curr_model, accuracy = train_classifier(device, curr_model, dataloaders, num_epochs, num_classes)
-        utils.logger.info(f"Trial {trial}: Val Accuracy = {accuracy}")
+        utils.logger.info(f"Trial {fold}: Val Accuracy = {accuracy}")
 
-        eval_accuracy, eval_loss = evaluate_classifier(device, curr_model, test_dataloader)
-        utils.logger.info(f"Trial {trial}: Test Accuracy = {eval_accuracy}")
+        eval_accuracy, eval_loss = evaluate_classifier(device, curr_model, dataloaders["test"])
+        utils.logger.info(f"Trial {fold}: Test Accuracy = {eval_accuracy}")
         test_accuracy += eval_accuracy
 
-    return test_accuracy / num_trials
+    return test_accuracy / num_folds
 
 
 def stl_get_train_folds(fold_file, num_folds=10):
