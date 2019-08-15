@@ -12,22 +12,33 @@ from torch.utils.tensorboard import SummaryWriter
 import utils
 
 
-def random_rotate(images, num_patches, rotations, perms=None):
+def random_rotate(images, num_patches, rotations, perms=None, is_train=True):
     n, c, img_h, img_w = images.size()
 
     patch_size = int(img_h / math.sqrt(num_patches))
-    patches = F.unfold(images, kernel_size=(patch_size, patch_size), stride=(patch_size, patch_size))
+    patches = F.unfold(images, kernel_size=patch_size, stride=patch_size)
     patches = patches.reshape(n, c, patch_size, patch_size, num_patches)
+    permed_patches = torch.empty_like(patches)
+    permed_rotations = torch.empty_like(rotations)
     for img_idx in range(n):
         for patch_idx in range(num_patches):
             patches[img_idx, :, :, :, patch_idx] = torch.rot90(patches[img_idx, :, :, :, patch_idx],
                                                                rotations[img_idx, patch_idx].item(), [1, 2])
         if perms is not None:
-            patches[img_idx] = patches[img_idx, :, :, :, perms[img_idx]]
-            rotations[img_idx] = rotations[img_idx, perms[img_idx]]
+            permed_patches[img_idx] = patches[img_idx, :, :, :, perms[img_idx]]
+            permed_rotations[img_idx] = rotations[img_idx, perms[img_idx]]
 
     patches = patches.reshape(n, -1, num_patches)
-    images = F.fold(patches, output_size=img_h, kernel_size=(patch_size, patch_size), stride=(patch_size, patch_size))
+    images = F.fold(patches, output_size=img_h, kernel_size=patch_size, stride=patch_size)
+    if perms is not None:
+        permed_patches = permed_patches.reshape(n, -1, num_patches)
+        permed_images = F.fold(permed_patches, output_size=img_h, kernel_size=patch_size, stride=patch_size)
+        if is_train:
+            images = torch.cat((images, permed_images), dim=0)
+            rotations = torch.cat((rotations, permed_rotations), dim=0)
+        else:
+            images = permed_images
+            rotations = permed_rotations
     return images, torch.flatten(rotations)
 
 
@@ -55,7 +66,7 @@ def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles, m
             for inputs, rotations, perms in tqdm.tqdm(dataloaders[phase], desc=f"SSL {phase}"):
                 # writer.add_images("Raw Inputs", utils.denormalise(inputs, mean, std), epoch)
                 with torch.no_grad():
-                    inputs, labels = random_rotate(inputs, num_patches, rotations, perms)
+                    inputs, labels = random_rotate(inputs, num_patches, rotations, perms, phase == "train")
                 inputs = inputs.to(device)
                 labels = labels.to(device)
 
