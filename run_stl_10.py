@@ -9,11 +9,11 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset
 
-import rot.models
-import rot.train
+import models
 import sl_train
+import train
 import utils
-from rot.models import SSLTrainDataset, SSLValDataset
+from data import SSLTrainDataset, SSLValDataset
 
 # mean and std for STL-10 Unlabeled train split
 mean = (0.4226, 0.4120, 0.3636)
@@ -79,6 +79,10 @@ def parse_args():
                         type=int,
                         help='Number of hidden units for classifier',
                         default=9)
+    parser.add_argument('--learn_prd',
+                        type=int,
+                        help='Number of epochs before providing harder examples',
+                        default=10)
     parser.add_argument('--download',
                         help='Whether to download datasets',
                         action="store_true")
@@ -100,10 +104,9 @@ def main():
     input_transforms = transforms.Compose([transforms.ToTensor(),
                                            transforms.Normalize(mean, std)])
 
-    model = rot.models.RotResNet18(args.num_patches, args.num_angles)
-    # model = rot.models.RotAlexnetBN(args.num_patches, args.num_angles)
-    # model = rot.models.RotResNet50(args.num_patches, args.num_angles)
-    # model = rot.models.RotSiamResnet18(args.num_patches, args.num_angles)
+    model = models.ResNet18(args.num_patches, args.num_angles)
+    # model = models.AlexnetBN(args.num_patches, args.num_angles)
+    # model = models.ResNet50(args.num_patches, args.num_angles)
     # model = rot.models.SimpleConv(args.num_patches, args.num_angles)
     model_name = args.model_name
 
@@ -126,8 +129,8 @@ def main():
 
         # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{model_name}")))
 
-        model, best_val_accuracy = rot.train.ssl_train(device, model, unlabeled_dataloaders, args.ssl_num_epochs,
-                                                       args.num_patches, args.num_angles, mean, std)
+        model, best_val_accuracy = train.ssl_train(device, model, unlabeled_dataloaders, args.ssl_num_epochs,
+                                                   args.num_patches, args.num_angles, mean, std, args.learn_prd)
         model_name = time.ctime().replace(" ", "_").replace(":", "_")
         model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
         torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))
@@ -151,7 +154,11 @@ def main():
         dataloaders = {"test": DataLoader(stl_test, shuffle=False, batch_size=args.test_batch_size, pin_memory=True)}
 
         model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{model_name}")))
-        model.init_classifier(num_classes)
+        model.init_classifier(num_classes, freeze_params=False)
+
+        # query_img, _ = stl_train[-3]
+        # dataloader = DataLoader(stl_train, batch_size=128, shuffle=False, pin_memory=True)
+        # top_images, top_labels = train.retrieve_topk_images(device, model, query_img, dataloader, mean, std)
 
         avg_test_accuracy = sl_train.stl_sl_train(device, model, stl_train, fold_indices, args.num_epochs,
                                                   args.train_batch_size, args.val_batch_size, num_classes,

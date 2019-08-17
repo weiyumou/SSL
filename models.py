@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torchvision
-from torch.utils.data import Dataset
 
 
 class Flatten(nn.Module):
@@ -10,7 +9,7 @@ class Flatten(nn.Module):
         return torch.flatten(x, start_dim=1)
 
 
-class RotResNet18(nn.Module):
+class ResNet18(nn.Module):
 
     def __init__(self, num_patches, num_angles):
         super().__init__()
@@ -23,7 +22,7 @@ class RotResNet18(nn.Module):
             nn.ReLU(),
             nn.Linear(in_features=1024, out_features=num_patches * num_angles)
         )
-        self.backend.fc = nn.Sequential()
+        self.backend.fc = nn.Identity()
         self._initialize_weights()
 
     def forward(self, x):
@@ -48,8 +47,8 @@ class RotResNet18(nn.Module):
             Flatten(),
             nn.Linear(in_features=self.fc[1].in_features, out_features=num_classes)
         )
-        nn.init.normal_(self.fc.weight, 0, 0.01)
-        nn.init.constant_(self.fc.bias, 0)
+        nn.init.normal_(self.fc[-1].weight, 0, 0.01)
+        nn.init.constant_(self.fc[-1].bias, 0)
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -65,7 +64,7 @@ class RotResNet18(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
 
-class RotResNet50(nn.Module):
+class ResNet50(nn.Module):
 
     def __init__(self, num_patches, num_angles):
         super().__init__()
@@ -77,10 +76,7 @@ class RotResNet50(nn.Module):
             nn.Linear(in_features=2048, out_features=1024),
             nn.BatchNorm1d(num_features=1024),
             nn.ReLU(),
-            nn.Linear(in_features=1024, out_features=512),
-            nn.BatchNorm1d(num_features=512),
-            nn.ReLU(),
-            nn.Linear(in_features=512, out_features=num_patches * num_angles)
+            nn.Linear(in_features=1024, out_features=num_patches * num_angles)
         )
         self._initialize_weights()
 
@@ -94,6 +90,8 @@ class RotResNet50(nn.Module):
             Flatten(),
             nn.Linear(in_features=2048, out_features=num_classes)
         )
+        nn.init.normal_(self.fc[-1].weight, 0, 0.01)
+        nn.init.constant_(self.fc[-1].bias, 0)
 
     def _initialize_weights(self):
         for m in self.modules():
@@ -109,7 +107,7 @@ class RotResNet50(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
 
-class RotAlexnetBN(nn.Module):
+class AlexnetBN(nn.Module):
 
     def __init__(self, num_patches, num_angles):
         super().__init__()
@@ -147,10 +145,10 @@ class RotAlexnetBN(nn.Module):
             nn.Linear(in_features=256 * 6 * 6, out_features=4096),
             nn.BatchNorm1d(num_features=4096),
             nn.ReLU(),
-            nn.Linear(in_features=4096, out_features=1024),
-            nn.BatchNorm1d(num_features=1024),
+            nn.Linear(in_features=4096, out_features=4096),
+            nn.BatchNorm1d(num_features=4096),
             nn.ReLU(),
-            nn.Linear(in_features=1024, out_features=num_patches * num_angles)
+            nn.Linear(in_features=4096, out_features=num_patches * num_angles)
         )
         # self._initialize_weights()
 
@@ -214,38 +212,3 @@ class SimpleConv(nn.Module):
             elif isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, 0, 0.01)
                 nn.init.constant_(m.bias, 0)
-
-
-class SSLTrainDataset(Dataset):
-
-    def __init__(self, train_dataset, num_patches, num_angles) -> None:
-        super().__init__()
-        self.train_dataset = train_dataset
-        self.num_patches = num_patches
-        self.num_angles = num_angles
-
-    def __getitem__(self, index: int):
-        rotation = torch.empty(self.num_patches, dtype=torch.long).random_(self.num_angles)
-        perm = torch.randperm(self.num_patches, dtype=torch.long)
-        return self.train_dataset[index][0], rotation, perm
-
-    def __len__(self) -> int:
-        return len(self.train_dataset)
-
-
-class SSLValDataset(Dataset):
-
-    def __init__(self, val_dataset, num_patches, num_angles) -> None:
-        super().__init__()
-        self.val_dataset = val_dataset
-        self.rotations = dict()
-        self.perms = dict()
-        for index in range(len(val_dataset)):
-            self.rotations[index] = torch.empty(num_patches, dtype=torch.long).random_(num_angles)
-            self.perms[index] = torch.randperm(num_patches, dtype=torch.long)
-
-    def __getitem__(self, index: int):
-        return self.val_dataset[index][0], self.rotations[index], self.perms[index]
-
-    def __len__(self) -> int:
-        return len(self.val_dataset)
