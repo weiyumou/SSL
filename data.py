@@ -1,24 +1,83 @@
 import math
+import random
 
+import torch
+from torch.distributions.poisson import Poisson
 from torch.nn import functional as F
 from torch.utils.data import Dataset
-from torch.distributions.poisson import Poisson
-import torch
-import random
+
+
+def calc_dn(n):
+    """
+    Calculate the number of derangement D_n
+    :param n: The length of the sequence
+    :return: A list of number for all 0 <= i <= n
+    """
+    ds = [1, 0]
+    for i in range(2, n + 1):
+        ds.append((i - 1) * (ds[i - 1] + ds[i - 2]))
+    return ds
+
+
+def random_derangement(n, ds):
+    """
+    Implementation of the algorithm for generating random derangement of length n,
+    as described in the paper "Generating Random Derangements"
+    retrieved at https://epubs.siam.org/doi/pdf/10.1137/1.9781611972986.7
+    :param n: The length of the derangement
+    :param ds: A list of lengths of derangement for all 0 <= i <= n
+    :return: A random derangement
+    """
+    perm = list(range(n))
+    mask = [False] * n
+
+    i, u = n - 1, n - 1
+    while u >= 1:
+        if not mask[i]:
+            j = random.randrange(i)
+            while mask[j]:
+                j = random.randrange(i)
+            perm[i], perm[j] = perm[j], perm[i]
+            p = random.random()
+            if p < u * ds[u - 1] / ds[u + 1]:
+                mask[j] = True
+                u -= 1
+            u -= 1
+        i -= 1
+    return perm
+
+
+def k_permute(n, k, ds):
+    """
+    Produces a random permutation of n elements that contains a derangment of k elements
+    :param n: Total number of elements
+    :param k: The length of the derangement
+    :param ds: A list of lengths of derangement for all 0 <= i <= n
+    :return: A random permutation with a derangement of the desired length
+    """
+    k = min(k, n)
+    indices = list(range(n))
+    sel_indices = sorted(random.sample(indices, k))
+    perm = random_derangement(k, ds)
+    new_indices = indices.copy()
+    for i, p in enumerate(perm):
+        new_indices[sel_indices[i]] = indices[sel_indices[p]]
+    return new_indices
 
 
 class SSLTrainDataset(Dataset):
     def __init__(self, train_dataset, num_patches, num_angles) -> None:
-        super().__init__()
+        super(SSLTrainDataset, self).__init__()
         self.train_dataset = train_dataset
         self.num_patches = num_patches
         self.num_angles = num_angles
+        self.ds = calc_dn(num_patches)
         self.pdist = Poisson(rate=1)
 
     def __getitem__(self, index: int):
         rotation = torch.empty(self.num_patches, dtype=torch.long).random_(self.num_angles)
         k = self.pdist.sample().int().item()
-        perm = torch.tensor(self.k_permute(self.num_patches, k), dtype=torch.long)
+        perm = torch.tensor(k_permute(self.num_patches, k, self.ds), dtype=torch.long)
         return self.train_dataset[index][0], rotation, perm
 
     def __len__(self) -> int:
@@ -27,27 +86,18 @@ class SSLTrainDataset(Dataset):
     def set_poisson_rate(self, rate):
         self.pdist = Poisson(rate)
 
-    @staticmethod
-    def k_permute(n, k):
-        k = min(k, n)
-        indices = list(range(n))
-        sel_indices = random.sample(indices, k)
-        perm = indices.copy()
-        for idx, sel_idx in enumerate(sel_indices):
-            perm[sel_idx] = indices[sel_indices[(idx + 1) % k]]
-        return perm
-
 
 class SSLValDataset(Dataset):
 
     def __init__(self, val_dataset, num_patches, num_angles) -> None:
-        super().__init__()
+        super(SSLValDataset, self).__init__()
         self.val_dataset = val_dataset
         self.rotations = dict()
         self.perms = dict()
+        ds = calc_dn(num_patches)
         for index in range(len(val_dataset)):
             self.rotations[index] = torch.empty(num_patches, dtype=torch.long).random_(num_angles)
-            self.perms[index] = torch.randperm(num_patches, dtype=torch.long)
+            self.perms[index] = torch.tensor(k_permute(num_patches, num_patches, ds), dtype=torch.long)
 
     def __getitem__(self, index: int):
         return self.val_dataset[index][0], self.rotations[index], self.perms[index]
