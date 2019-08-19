@@ -12,18 +12,18 @@ class Flatten(nn.Module):
 class ResNet18(nn.Module):
 
     def __init__(self, num_patches, num_angles):
-        super().__init__()
+        super(ResNet18, self).__init__()
 
         self.backend = torchvision.models.resnet18()
+        self.backend.fc = nn.Identity()
         self.fc = nn.Sequential(
             Flatten(),
-            nn.Linear(in_features=self.backend.fc.in_features, out_features=1024),
+            nn.Linear(in_features=512, out_features=1024),
             nn.BatchNorm1d(num_features=1024),
             nn.ReLU(),
             nn.Linear(in_features=1024, out_features=num_patches * num_angles)
         )
-        self.backend.fc = nn.Identity()
-        self._initialize_weights()
+        self._initialise_fc()
 
     def forward(self, x):
         for _, layer in self.backend.named_children():
@@ -47,27 +47,22 @@ class ResNet18(nn.Module):
             Flatten(),
             nn.Linear(in_features=self.fc[1].in_features, out_features=num_classes)
         )
-        nn.init.normal_(self.fc[-1].weight, 0, 0.01)
-        nn.init.constant_(self.fc[-1].bias, 0)
+        self._initialise_fc()
 
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
+    def _initialise_fc(self):
+        for m in self.fc.modules():
+            if isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, 0, 0.01)
                 nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
 
-class ResNet50(nn.Module):
+class ResNet50(ResNet18):
 
     def __init__(self, num_patches, num_angles):
-        super().__init__()
+        super(ResNet50, self).__init__(num_patches, num_angles)
 
         self.backend = torchvision.models.resnet50()
         self.backend.fc = nn.Identity()
@@ -78,39 +73,13 @@ class ResNet50(nn.Module):
             nn.ReLU(),
             nn.Linear(in_features=1024, out_features=num_patches * num_angles)
         )
-        self._initialize_weights()
-
-    def forward(self, x):
-        for _, layer in self.backend.named_children():
-            x = layer(x)
-        return self.fc(x)
-
-    def init_classifier(self, num_classes):
-        self.fc = nn.Sequential(
-            Flatten(),
-            nn.Linear(in_features=2048, out_features=num_classes)
-        )
-        nn.init.normal_(self.fc[-1].weight, 0, 0.01)
-        nn.init.constant_(self.fc[-1].bias, 0)
-
-    def _initialize_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.BatchNorm1d):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
+        self._initialise_fc()
 
 
 class AlexnetBN(nn.Module):
 
     def __init__(self, num_patches, num_angles):
-        super().__init__()
+        super(AlexnetBN, self).__init__()
         self.conv1 = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=(11, 11), stride=(4, 4), padding=(2, 2), bias=False),
             nn.BatchNorm2d(num_features=64),
@@ -157,7 +126,11 @@ class AlexnetBN(nn.Module):
             x = layer(x)
         return x
 
-    def init_classifier(self, num_classes):
+    def init_classifier(self, num_classes, freeze_params=True):
+        if freeze_params:
+            for param in self.parameters():
+                param.requires_grad = False
+
         self.fc = nn.Sequential(
             Flatten(),
             nn.Linear(in_features=256 * 6 * 6, out_features=num_classes)

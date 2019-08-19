@@ -1,19 +1,20 @@
 import copy
+import math
 import queue
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import tqdm
+from torch.optim.optimizer import Optimizer
 from torch.utils.tensorboard import SummaryWriter
 
 import utils
 from data import random_rotate
-from torch.optim.optimizer import Optimizer
-import math
 
 
-def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles, mean, std, learn_prd):
+def ssl_train(device, model, dataloaders, num_epochs,
+              num_patches, num_angles, mean, std, learn_prd, poisson_rate):
     model = model.to(device)
     optimiser = optim.Adam(model.parameters())
     criterion = nn.CrossEntropyLoss()
@@ -21,13 +22,7 @@ def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles, m
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_val_accuracy = 1 / num_angles
-    poisson_rate = 0
     for epoch in range(num_epochs):
-        if epoch % learn_prd == 0:
-            poisson_rate += 1
-            dataloaders["train"].dataset.set_poisson_rate(poisson_rate)
-        writer.add_scalar("Poisson_Rate", poisson_rate, epoch)
-
         for phase in ["train", "val"]:
             running_loss = 0.0
             loss_total = 0
@@ -76,6 +71,10 @@ def ssl_train(device, model, dataloaders, num_epochs, num_patches, num_angles, m
                 utils.logger.info(f"Epoch {epoch}: {phase} accuracy = {epoch_accuracy}")
                 writer.add_scalar(f"{phase}_accuracy", epoch_accuracy, epoch)
 
+        writer.add_scalar("Poisson_Rate", poisson_rate, epoch)
+        if (epoch + 1) % learn_prd == 0:
+            poisson_rate += 1
+            dataloaders["train"].dataset.set_poisson_rate(poisson_rate)
     model.load_state_dict(best_model_wts)
     writer.close()
     return model, best_val_accuracy
