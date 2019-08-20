@@ -28,11 +28,11 @@ def parse_args():
                         required=True)
     parser.add_argument('--model_dir',
                         type=str,
-                        help='Path to the save/load models',
+                        help='Path to the saved models',
                         default="models")
     parser.add_argument('--model_name',
                         type=str,
-                        help='Path to the save/load models',
+                        help='Name of the saved model',
                         default=None)
     parser.add_argument('--deterministic',
                         help='Whether to set random seeds',
@@ -42,11 +42,11 @@ def parse_args():
                         action="store_true")
     parser.add_argument('--ssl_train_batch_size',
                         type=int,
-                        help='Batch size for SSL',
+                        help='Train batch size for SSL',
                         default=64)
     parser.add_argument('--ssl_val_batch_size',
                         type=int,
-                        help='Batch size for SSL',
+                        help='Val batch size for SSL',
                         default=64)
     parser.add_argument('--ssl_num_epochs',
                         type=int,
@@ -57,32 +57,36 @@ def parse_args():
                         action="store_true")
     parser.add_argument('--num_epochs',
                         type=int,
-                        help='Number of epochs to train for cross validation',
+                        help='Number of epochs for SL',
                         default=30)
     parser.add_argument('--train_batch_size',
                         type=int,
-                        help='Train batch size for cross validation',
+                        help='Train batch size for SL',
                         default=128)
     parser.add_argument('--val_batch_size',
                         type=int,
-                        help='Val batch size for cross validation',
+                        help='Val batch size for SL',
                         default=128)
     parser.add_argument('--test_batch_size',
                         type=int,
-                        help='Test batch size for cross validation',
+                        help='Test batch size for SL',
                         default=128)
     parser.add_argument('--num_angles',
                         type=int,
-                        help='Number of hidden units for classifier',
+                        help='Number of rotation angles',
                         default=4)
     parser.add_argument('--num_patches',
                         type=int,
-                        help='Number of hidden units for classifier',
+                        help='Number of patches to extract from an image',
                         default=9)
     parser.add_argument('--learn_prd',
                         type=int,
                         help='Number of epochs before providing harder examples',
                         default=10)
+    parser.add_argument('--poisson_rate',
+                        type=int,
+                        help='The initial poisson rate lambda',
+                        default=2)
     parser.add_argument('--download',
                         help='Whether to download datasets',
                         action="store_true")
@@ -130,7 +134,8 @@ def main():
         # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{model_name}")))
 
         model, best_val_accuracy = train.ssl_train(device, model, unlabeled_dataloaders, args.ssl_num_epochs,
-                                                   args.num_patches, args.num_angles, mean, std, args.learn_prd)
+                                                   args.num_patches, args.num_angles, mean, std, args.learn_prd,
+                                                   args.poisson_rate)
         model_name = time.ctime().replace(" ", "_").replace(":", "_")
         model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
         torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))
