@@ -22,6 +22,8 @@ def ssl_train(device, model, dataloaders, num_epochs,
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_val_accuracy = 1 / num_angles
+    dataloaders["train"].dataset.set_poisson_rate(poisson_rate)
+
     for epoch in range(num_epochs):
         for phase in ["train", "val"]:
             running_loss = 0.0
@@ -71,7 +73,7 @@ def ssl_train(device, model, dataloaders, num_epochs,
                 utils.logger.info(f"Epoch {epoch}: {phase} accuracy = {epoch_accuracy}")
                 writer.add_scalar(f"{phase}_accuracy", epoch_accuracy, epoch)
 
-        writer.add_scalar("Poisson_Rate", poisson_rate, epoch)
+        writer.add_scalar("Poisson_Rate", dataloaders["train"].dataset.pdist.rate, epoch)
         if (epoch + 1) % learn_prd == 0:
             poisson_rate += 1
             dataloaders["train"].dataset.set_poisson_rate(poisson_rate)
