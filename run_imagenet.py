@@ -194,8 +194,6 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    train_dir = os.path.join(args.data, 'train')
-    val_dir = os.path.join(args.data, 'val')
     input_transforms = transforms.Compose([
         transforms.Resize(256),
         transforms.CenterCrop(224),
@@ -204,8 +202,11 @@ def main_worker(gpu, ngpus_per_node, args):
                              std=[0.229, 0.224, 0.225])
     ])
 
-    imagenet_train = datasets.ImageNet(root=train_dir, split="train",
-                                       download=args.download, transform=input_transforms)
+    train_dir = os.path.join(args.data, 'train')
+    val_dir = os.path.join(args.data, 'val')
+    imagenet_train = datasets.ImageFolder(root=train_dir, transform=input_transforms)
+    # imagenet_train = datasets.ImageNet(root=args.data, split="train",
+    #                                    download=args.download, transform=input_transforms)
     train_dataset = SSLTrainDataset(imagenet_train, args.num_patches, args.num_angles)
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -215,8 +216,9 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
-    imagenet_val = datasets.ImageNet(root=val_dir, split="val",
-                                     download=args.download, transform=input_transforms)
+    imagenet_val = datasets.ImageFolder(root=val_dir, transform=input_transforms)
+    # imagenet_val = datasets.ImageNet(root=args.data, split="val",
+    #                                  download=args.download, transform=input_transforms)
     val_dataset = SSLValDataset(imagenet_val, args.num_patches, args.num_angles)
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=args.batch_size, shuffle=False,
