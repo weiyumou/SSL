@@ -111,7 +111,11 @@ def main():
     model = models.ResNet18(args.num_patches, args.num_angles)
     # model = models.AlexnetBN(args.num_patches, args.num_angles)
     # model = models.ResNet50(args.num_patches, args.num_angles)
-    # model = rot.models.SimpleConv(args.num_patches, args.num_angles)
+    # model = models.SimpleConv(args.num_patches, args.num_angles)
+    # model = models.DRN_A_18(args.num_patches, args.num_angles)
+    # model = models.VGG11(args.num_patches, args.num_angles)
+    # model = models.DenseNet201(args.num_patches, args.num_angles)
+    # model = torch.nn.DataParallel(model)
     model_name = args.model_name
 
     if args.do_ssl:

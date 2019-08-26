@@ -3,7 +3,6 @@ import os
 import random
 import shutil
 import time
-import warnings
 
 import numpy as np
 import torch
@@ -17,6 +16,7 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
+from torch.utils.tensorboard import SummaryWriter
 
 import models
 from data import SSLTrainDataset, SSLValDataset
@@ -62,8 +62,6 @@ def parse_args():
     parser.add_argument('--deterministic',
                         help='Whether to set random seeds',
                         action="store_true")
-    parser.add_argument('--gpu', default=None, type=int,
-                        help='GPU id to use.')
     parser.add_argument('--multiprocessing-distributed', action='store_true',
                         help='Use multi-processing distributed training to launch '
                              'N processes per node, which has N GPUs. This is the '
@@ -91,7 +89,9 @@ def parse_args():
     return parser.parse_args()
 
 
-best_acc1 = 0
+best_acc = 0
+mean = (0.485, 0.456, 0.406)
+std = (0.229, 0.224, 0.225)
 
 
 def main():
@@ -102,10 +102,6 @@ def main():
         torch.manual_seed(0)
         np.random.seed(0)
         torch.backends.cudnn.deterministic = True
-
-    if args.gpu is not None:
-        warnings.warn('You have chosen a specific GPU. This will completely '
-                      'disable data parallelism.')
 
     if args.dist_url == "env://" and args.world_size == -1:
         args.world_size = int(os.environ["WORLD_SIZE"])
@@ -122,15 +118,11 @@ def main():
         mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, args))
     else:
         # Simply call main_worker function
-        main_worker(args.gpu, ngpus_per_node, args)
+        main_worker(None, ngpus_per_node, args)
 
 
 def main_worker(gpu, ngpus_per_node, args):
-    global best_acc1
-    args.gpu = gpu
-
-    if args.gpu is not None:
-        print("Use GPU: {} for training".format(args.gpu))
+    global best_acc
 
     if args.distributed:
         if args.dist_url == "env://" and args.rank == -1:
@@ -145,32 +137,16 @@ def main_worker(gpu, ngpus_per_node, args):
     model = models.ResNet50(args.num_patches, args.num_angles)
 
     if args.distributed:
-        # For multiprocessing distributed, DistributedDataParallel constructor
-        # should always set the single device scope, otherwise,
-        # DistributedDataParallel will use all available devices.
-        if args.gpu is not None:
-            torch.cuda.set_device(args.gpu)
-            model.cuda(args.gpu)
-            # When using a single GPU per process and per
-            # DistributedDataParallel, we need to divide the batch size
-            # ourselves based on the total number of GPUs we have
-            args.batch_size = int(args.batch_size / ngpus_per_node)
-            args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-        else:
-            model.cuda()
-            # DistributedDataParallel will divide and allocate batch_size to all
-            # available GPUs if device_ids are not set
-            model = torch.nn.parallel.DistributedDataParallel(model)
-    elif args.gpu is not None:
-        torch.cuda.set_device(args.gpu)
-        model = model.cuda(args.gpu)
+        model.cuda()
+        # DistributedDataParallel will divide and allocate batch_size to all
+        # available GPUs if device_ids are not set
+        model = torch.nn.parallel.DistributedDataParallel(model)
     else:
         # DataParallel will divide and allocate batch_size to all available GPUs
         model = torch.nn.DataParallel(model).cuda()
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    criterion = nn.CrossEntropyLoss().cuda()
     optimiser = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
@@ -179,11 +155,8 @@ def main_worker(gpu, ngpus_per_node, args):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
             args.start_epoch = checkpoint['epoch']
-            best_acc1 = checkpoint['best_acc1']
+            best_acc = checkpoint['best_acc']
             args.poisson_rate = checkpoint["poisson_rate"]
-            if args.gpu is not None:
-                # best_acc1 may be from a checkpoint from a different GPU
-                best_acc1 = best_acc1.to(args.gpu)
             model.load_state_dict(checkpoint['state_dict'])
             optimiser.load_state_dict(checkpoint['optimizer'])
             print("=> loaded checkpoint '{}' (epoch {})"
@@ -196,17 +169,14 @@ def main_worker(gpu, ngpus_per_node, args):
     # Data loading code
     input_transforms = transforms.Compose([
         transforms.Resize(256),
-        transforms.CenterCrop(224),
+        transforms.CenterCrop(225),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
+        transforms.Normalize(mean, std)
     ])
 
     train_dir = os.path.join(args.data, 'train')
     val_dir = os.path.join(args.data, 'val')
     imagenet_train = datasets.ImageFolder(root=train_dir, transform=input_transforms)
-    # imagenet_train = datasets.ImageNet(root=args.data, split="train",
-    #                                    download=args.download, transform=input_transforms)
     train_dataset = SSLTrainDataset(imagenet_train, args.num_patches, args.num_angles)
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -217,37 +187,37 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     imagenet_val = datasets.ImageFolder(root=val_dir, transform=input_transforms)
-    # imagenet_val = datasets.ImageNet(root=args.data, split="val",
-    #                                  download=args.download, transform=input_transforms)
     val_dataset = SSLValDataset(imagenet_val, args.num_patches, args.num_angles)
     val_loader = torch.utils.data.DataLoader(val_dataset,
                                              batch_size=args.batch_size, shuffle=False,
                                              num_workers=args.workers, pin_memory=True)
+
     if args.evaluate:
         validate(val_loader, model, criterion, args)
         return
 
+    writer = SummaryWriter()
     train_loader.dataset.set_poisson_rate(args.poisson_rate)
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimiser, epoch, args)
+        train_loss, train_acc = train(train_loader, model, criterion, optimiser, epoch, args)
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, criterion, args)
+        val_loss, val_acc = validate(val_loader, model, criterion, args)
 
         # remember best acc@1 and save checkpoint
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
+        is_best = val_acc > best_acc
+        best_acc = max(val_acc, best_acc)
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                                                     and args.rank % ngpus_per_node == 0):
             save_checkpoint({
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
-                'best_acc1': best_acc1,
+                'best_acc': best_acc,
                 'optimizer': optimiser.state_dict(),
                 "poisson_rate": args.poisson_rate
             }, is_best)
@@ -255,6 +225,12 @@ def main_worker(gpu, ngpus_per_node, args):
         if (epoch + 1) % args.learn_prd == 0:
             args.poisson_rate += 1
             train_loader.dataset.set_poisson_rate(args.poisson_rate)
+
+        writer.add_scalars("Loss", {"train_loss": train_loss, "val_loss": val_loss}, epoch)
+        writer.add_scalars("Accuracy", {"train_acc": train_acc, "val_acc": val_acc}, epoch)
+        writer.add_scalar("Poisson_Rate", train_loader.dataset.pdist.rate, epoch)
+
+    writer.close()
 
 
 def train(train_loader, model, criterion, optimiser, epoch, args):
@@ -267,18 +243,17 @@ def train(train_loader, model, criterion, optimiser, epoch, args):
         [batch_time, data_time, losses, top1],
         prefix=f"Epoch: [{epoch}]")
 
-    # switch to train mode
     model.train()
-
     end = time.time()
     for i, (inputs, rotations, perms) in enumerate(train_loader):
         with torch.no_grad():
             inputs, labels = random_rotate(inputs, args.num_patches, rotations, perms)
+
         # measure data loading time
         data_time.update(time.time() - end)
 
-        inputs = inputs.cuda(args.gpu, non_blocking=True)
-        labels = labels.cuda(args.gpu, non_blocking=True)
+        inputs = inputs.cuda(non_blocking=True)
+        labels = labels.cuda(non_blocking=True)
 
         # compute output
         outputs = model(inputs)
@@ -304,6 +279,8 @@ def train(train_loader, model, criterion, optimiser, epoch, args):
         if i % args.print_freq == 0:
             progress.display(i)
 
+    return losses.avg, top1.avg
+
 
 def validate(val_loader, model, criterion, args):
     batch_time = AverageMeter('Time', ':6.3f')
@@ -314,16 +291,14 @@ def validate(val_loader, model, criterion, args):
         [batch_time, losses, top1],
         prefix='Test: ')
 
-    # switch to evaluate mode
     model.eval()
-
     with torch.no_grad():
         end = time.time()
         for i, (inputs, rotations, perms) in enumerate(val_loader):
             inputs, labels = random_rotate(inputs, args.num_patches, rotations, perms)
 
-            inputs = inputs.cuda(args.gpu, non_blocking=True)
-            labels = labels.cuda(args.gpu, non_blocking=True)
+            inputs = inputs.cuda(non_blocking=True)
+            labels = labels.cuda(non_blocking=True)
 
             # compute output
             outputs = model(inputs)
@@ -345,16 +320,15 @@ def validate(val_loader, model, criterion, args):
             if i % args.print_freq == 0:
                 progress.display(i)
 
-        # TODO: this should also be done with the ProgressMeter
         print(f' * Acc@1 {top1.avg:.3f}')
 
-    return top1.avg
+    return losses.avg, top1.avg
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+def save_checkpoint(state, is_best, filename='checkpoint.pth'):
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(filename, 'model_best.pth')
 
 
 class AverageMeter(object):
