@@ -19,6 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 import models
 from data import SSLTrainDataset, SSLValDataset, random_rotate
+from ranger import Ranger
 
 try:
     from apex.parallel import DistributedDataParallel as DDP
@@ -154,10 +155,11 @@ def main():
     model = model.cuda()
 
     # Scale learning rate based on global batch size
-    args.lr = args.lr * float(args.batch_size * args.world_size) / 256.
-    optimiser = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    args.lr *= args.batch_size * args.world_size / 256
+    # optimiser = torch.optim.SGD(model.parameters(), args.lr,
+    #                             momentum=args.momentum,
+    #                             weight_decay=args.weight_decay)
+    optimiser = Ranger(model.parameters(), lr=args.lr)
 
     # Initialize Amp.  Amp accepts either values or strings for the optional override arguments,
     # for convenient interoperation with argparse.

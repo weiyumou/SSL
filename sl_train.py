@@ -11,7 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 import utils
 
 
-def train_classifier(device, model, dataloaders, num_epochs, num_classes):
+def train_classifier(device, model, dataloaders, args):
     model = model.to(device)
     params_to_update = []
     for name, param in model.named_parameters():
@@ -23,10 +23,10 @@ def train_classifier(device, model, dataloaders, num_epochs, num_classes):
     criterion = nn.CrossEntropyLoss()
 
     best_model_wts = copy.deepcopy(model.state_dict())
-    best_accuracy = 1 / num_classes
+    best_accuracy = 1 / args.num_classes
     writer = SummaryWriter()
 
-    for epoch in range(num_epochs):
+    for epoch in range(args.num_epochs):
         running_loss = 0.0
         total = 0
 
@@ -87,8 +87,7 @@ def evaluate_classifier(device, model, eval_loader):
     return accuracy, eval_loss
 
 
-def stl_sl_train(device, model, train_dataset, fold_indices, num_epochs,
-                 train_batch_size, val_batch_size, num_classes, dataloaders):
+def stl_sl_train(device, model, train_dataset, fold_indices, dataloaders, args):
     test_accuracy = 0.0
     num_folds, num_examples = fold_indices.shape
     for fold in range(num_folds):
@@ -97,10 +96,10 @@ def stl_sl_train(device, model, train_dataset, fold_indices, num_epochs,
 
         curr_model = copy.deepcopy(model)
         dataloaders["train"] = DataLoader(Subset(train_dataset, train_indices), shuffle=True,
-                                          batch_size=train_batch_size, pin_memory=True)
+                                          batch_size=args.train_batch_size, pin_memory=True)
         dataloaders["val"] = DataLoader(Subset(train_dataset, val_indices), shuffle=False,
-                                        batch_size=val_batch_size, pin_memory=True)
-        curr_model, accuracy = train_classifier(device, curr_model, dataloaders, num_epochs, num_classes)
+                                        batch_size=args.val_batch_size, pin_memory=True)
+        curr_model, accuracy = train_classifier(device, curr_model, dataloaders, args)
         utils.logger.info(f"Trial {fold}: Val Accuracy = {accuracy}")
 
         eval_accuracy, eval_loss = evaluate_classifier(device, curr_model, dataloaders["test"])

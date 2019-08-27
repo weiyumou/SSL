@@ -115,8 +115,7 @@ def main():
     # model = models.DRN_A_18(args.num_patches, args.num_angles)
     # model = models.VGG11(args.num_patches, args.num_angles)
     # model = models.DenseNet201(args.num_patches, args.num_angles)
-    # model = torch.nn.DataParallel(model)
-    model_name = args.model_name
+    model = torch.nn.DataParallel(model)
 
     if args.do_ssl:
         stl_unlabeled = datasets.STL10(root=args.data_dir,
@@ -126,7 +125,7 @@ def main():
         indices = list(range(len(stl_unlabeled)))
         train_indices = indices[:int(len(indices) * 0.9)]
         val_indices = indices[int(len(indices) * 0.9):]
-        unlabeled_dataloaders = {
+        dataloaders = {
             "train": DataLoader(
                 SSLTrainDataset(Subset(stl_unlabeled, train_indices), args.num_patches, args.num_angles),
                 shuffle=True, batch_size=args.ssl_train_batch_size, pin_memory=True),
@@ -135,17 +134,17 @@ def main():
                 shuffle=False, batch_size=args.ssl_val_batch_size, pin_memory=True)
         }
 
-        # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{model_name}")))
+        # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{args.model_name}")))
+        # dataloaders["train"].dataset.set_poisson_rate(args.poisson_rate)
+        # train.gen_grad_map(device, model, dataloaders, args.num_patches, args.num_angles)
 
-        model, best_val_accuracy = train.ssl_train(device, model, unlabeled_dataloaders, args.ssl_num_epochs,
-                                                   args.num_patches, args.num_angles, mean, std, args.learn_prd,
-                                                   args.poisson_rate)
+        model, best_val_accuracy = train.ssl_train(device, model, dataloaders, args)
         model_name = time.ctime().replace(" ", "_").replace(":", "_")
         model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
         torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))
 
     if args.do_sl:
-        if model_name is None:
+        if args.model_name is None:
             raise ValueError("Model name must be specified")
 
         stl_train = datasets.STL10(root=args.data_dir,
@@ -153,7 +152,7 @@ def main():
                                    transform=input_transforms,
                                    download=args.download)
 
-        num_classes = len(stl_train.classes)
+        args.num_classes = len(stl_train.classes)
         fold_indices = sl_train.stl_get_train_folds(os.path.join(args.data_dir, "stl10_binary/fold_indices.txt"))
 
         stl_test = datasets.STL10(root=args.data_dir,
@@ -162,16 +161,14 @@ def main():
                                   download=args.download)
         dataloaders = {"test": DataLoader(stl_test, shuffle=False, batch_size=args.test_batch_size, pin_memory=True)}
 
-        model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{model_name}")))
-        model.init_classifier(num_classes, freeze_params=False)
+        model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{args.model_name}")))
+        model.init_classifier(args.num_classes, freeze_params=False)
 
         # query_img, _ = stl_train[-3]
         # dataloader = DataLoader(stl_train, batch_size=128, shuffle=False, pin_memory=True)
         # top_images, top_labels = train.retrieve_topk_images(device, model, query_img, dataloader, mean, std)
 
-        avg_test_accuracy = sl_train.stl_sl_train(device, model, stl_train, fold_indices, args.num_epochs,
-                                                  args.train_batch_size, args.val_batch_size, num_classes,
-                                                  dataloaders)
+        avg_test_accuracy = sl_train.stl_sl_train(device, model, stl_train, fold_indices, dataloaders, args)
         utils.logger.info(f"Average Test Accuracy = {avg_test_accuracy}")
 
 

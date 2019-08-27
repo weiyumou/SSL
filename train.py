@@ -6,25 +6,25 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import tqdm
-from torch.optim.optimizer import Optimizer
+from ranger import Ranger
 from torch.utils.tensorboard import SummaryWriter
 
 import utils
 from data import random_rotate
 
 
-def ssl_train(device, model, dataloaders, num_epochs,
-              num_patches, num_angles, mean, std, learn_prd, poisson_rate):
+def ssl_train(device, model, dataloaders, args):
     model = model.to(device)
-    optimiser = optim.Adam(model.parameters())
+    # optimiser = optim.Adam(model.parameters())
+    optimiser = Ranger(model.parameters())
     criterion = nn.CrossEntropyLoss()
     writer = SummaryWriter()
 
     best_model_wts = copy.deepcopy(model.state_dict())
-    best_val_accuracy = 1 / num_angles
-    dataloaders["train"].dataset.set_poisson_rate(poisson_rate)
+    best_val_accuracy = 1 / args.num_angles
+    dataloaders["train"].dataset.set_poisson_rate(args.poisson_rate)
 
-    for epoch in range(num_epochs):
+    for epoch in range(args.ssl_num_epochs):
         for phase in ["train", "val"]:
             running_loss = 0.0
             loss_total = 0
@@ -37,16 +37,14 @@ def ssl_train(device, model, dataloaders, num_epochs,
                 model.eval()
 
             for inputs, rotations, perms in tqdm.tqdm(dataloaders[phase], desc=f"SSL {phase}"):
-                # writer.add_images("Raw Inputs", utils.denormalise(inputs, mean, std), epoch)
                 with torch.no_grad():
-                    inputs, labels = random_rotate(inputs, num_patches, rotations, perms)
+                    inputs, labels = random_rotate(inputs, args.num_patches, rotations, perms)
                 inputs = inputs.to(device)
                 labels = labels.to(device)
 
-                # writer.add_images("Inputs", utils.denormalise(inputs, mean, std), epoch)
                 with torch.set_grad_enabled(phase == "train"):
                     outputs = model(inputs)
-                    outputs = outputs.reshape(-1, num_angles)
+                    outputs = outputs.reshape(-1, args.num_angles)
                     loss = criterion(outputs, labels)
 
                 if phase == "train":
@@ -74,9 +72,9 @@ def ssl_train(device, model, dataloaders, num_epochs,
                 writer.add_scalar(f"{phase}_accuracy", epoch_accuracy, epoch)
 
         writer.add_scalar("Poisson_Rate", dataloaders["train"].dataset.pdist.rate, epoch)
-        if (epoch + 1) % learn_prd == 0:
-            poisson_rate += 1
-            dataloaders["train"].dataset.set_poisson_rate(poisson_rate)
+        if (epoch + 1) % args.learn_prd == 0:
+            args.poisson_rate += 1
+            dataloaders["train"].dataset.set_poisson_rate(args.poisson_rate)
     model.load_state_dict(best_model_wts)
     writer.close()
     return model, best_val_accuracy
@@ -119,79 +117,43 @@ def retrieve_topk_images(device, model, query_img, dataloader, mean, std, k=16):
     return top_images, list(reversed(top_labels))
 
 
-class RAdam(Optimizer):
+def gen_grad_map(device, model, dataloaders, args):
+    writer = SummaryWriter()
+    model = model.to(device)
+    criterion = nn.CrossEntropyLoss().to(device)
 
-    def __init__(self, params, lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0):
-        defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay)
-        self.buffer = [[None, None, None] for ind in range(10)]
-        super(RAdam, self).__init__(params, defaults)
+    model.train()
+    train_iter = iter(dataloaders["train"])
+    inputs, rotations, perms = next(train_iter)
+    with torch.no_grad():
+        inputs, labels = random_rotate(inputs, args.num_patches, rotations, perms)
 
-    def __setstate__(self, state):
-        super(RAdam, self).__setstate__(state)
+    n, c, h, w = inputs.size()
+    inputs = inputs.to(device).requires_grad_()
+    labels = labels.to(device)
 
-    def step(self, closure=None):
+    outputs = model(inputs)
+    outputs = outputs.reshape(-1, args.num_angles)
 
-        loss = None
-        if closure is not None:
-            loss = closure()
+    for image_idx in range(n):
+        image_grads = []
+        for num in range(args.num_patches):
+            patch_idx = num + args.num_patches * image_idx
 
-        for group in self.param_groups:
+            loss = criterion(outputs[patch_idx].unsqueeze(dim=0), labels[patch_idx].unsqueeze(dim=0))
+            model.zero_grad()
+            loss.backward(retain_graph=True)
 
-            for p in group['params']:
-                if p.grad is None:
-                    continue
-                grad = p.grad.data.float()
-                if grad.is_sparse:
-                    raise RuntimeError('RAdam does not support sparse gradients')
+            grad = torch.abs(inputs.grad[image_idx, -1])
+            min_grad = torch.min(grad)
+            max_grad = torch.max(grad)
+            image_grads.append(grad.sub(min_grad).div(max_grad - min_grad))
+            inputs.grad = torch.zeros_like(inputs.grad)
 
-                p_data_fp32 = p.data.float()
+        image_grads = torch.stack(image_grads, dim=2).reshape(1, -1, args.num_patches)
+        image_grads = torch.nn.functional.fold(image_grads, output_size=h * int(math.sqrt(args.num_patches)),
+                                               kernel_size=h,
+                                               stride=h)
+        writer.add_images(f"Grad_Map/{image_idx}", image_grads, 0)
 
-                state = self.state[p]
-
-                if len(state) == 0:
-                    state['step'] = 0
-                    state['exp_avg'] = torch.zeros_like(p_data_fp32)
-                    state['exp_avg_sq'] = torch.zeros_like(p_data_fp32)
-                else:
-                    state['exp_avg'] = state['exp_avg'].type_as(p_data_fp32)
-                    state['exp_avg_sq'] = state['exp_avg_sq'].type_as(p_data_fp32)
-
-                exp_avg, exp_avg_sq = state['exp_avg'], state['exp_avg_sq']
-                beta1, beta2 = group['betas']
-
-                exp_avg_sq.mul_(beta2).addcmul_(1 - beta2, grad, grad)
-                exp_avg.mul_(beta1).add_(1 - beta1, grad)
-
-                state['step'] += 1
-                buffered = self.buffer[int(state['step'] % 10)]
-                if state['step'] == buffered[0]:
-                    N_sma, step_size = buffered[1], buffered[2]
-                else:
-                    buffered[0] = state['step']
-                    beta2_t = beta2 ** state['step']
-                    N_sma_max = 2 / (1 - beta2) - 1
-                    N_sma = N_sma_max - 2 * state['step'] * beta2_t / (1 - beta2_t)
-                    buffered[1] = N_sma
-
-                    # more conservative since it's an approximated value
-                    if N_sma >= 5:
-                        step_size = group['lr'] * math.sqrt(
-                            (1 - beta2_t) * (N_sma - 4) / (N_sma_max - 4) * (N_sma - 2) / N_sma * N_sma_max / (
-                                        N_sma_max - 2)) / (1 - beta1 ** state['step'])
-                    else:
-                        step_size = group['lr'] / (1 - beta1 ** state['step'])
-                    buffered[2] = step_size
-
-                if group['weight_decay'] != 0:
-                    p_data_fp32.add_(-group['weight_decay'] * group['lr'], p_data_fp32)
-
-                # more conservative since it's an approximated value
-                if N_sma >= 5:
-                    denom = exp_avg_sq.sqrt().add_(group['eps'])
-                    p_data_fp32.addcdiv_(-step_size, exp_avg, denom)
-                else:
-                    p_data_fp32.add_(-step_size, exp_avg)
-
-                p.data.copy_(p_data_fp32)
-
-        return loss
+    writer.close()
