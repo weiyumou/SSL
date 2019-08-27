@@ -93,7 +93,52 @@ mean = (0.4883, 0.4739, 0.4334)
 std = (0.2457, 0.2409, 0.2514)
 
 
+def gen_grad_map(device, model, dataloaders, num_patches, num_angles):
+    from data import random_rotate
+    from torch.utils.tensorboard import SummaryWriter
+
+    writer = SummaryWriter()
+    model = model.to(device)
+    criterion = torch.nn.CrossEntropyLoss().to(device)
+
+    model.train()
+    train_iter = iter(dataloaders["train"])
+    inputs, rotations, perms = next(train_iter)
+    with torch.no_grad():
+        inputs, labels = random_rotate(inputs, num_patches, rotations, perms)
+
+    n, c, h, w = inputs.size()
+    inputs = inputs.to(device).requires_grad_()
+    labels = labels.to(device)
+
+    outputs = model(inputs)
+    outputs = outputs.reshape(-1, num_angles)
+
+    for image_idx in range(n):
+        image_grads = []
+        for num in range(num_patches):
+            patch_idx = num + num_patches * image_idx
+
+            loss = criterion(outputs[patch_idx].unsqueeze(dim=0), labels[patch_idx].unsqueeze(dim=0))
+            model.zero_grad()
+            loss.backward(retain_graph=True)
+
+            grad = torch.abs(inputs.grad[image_idx, -1])
+            min_grad = torch.min(grad)
+            max_grad = torch.max(grad)
+            image_grads.append(grad.sub(min_grad).div(max_grad - min_grad))
+            inputs.grad = torch.zeros_like(inputs.grad)
+
+        image_grads = torch.stack(image_grads, dim=2).reshape(1, -1, num_patches)
+        image_grads = torch.nn.functional.fold(image_grads, output_size=h * int(math.sqrt(num_patches)), kernel_size=h,
+                                               stride=h)
+        writer.add_images(f"Image_{image_idx}", image_grads, 0)
+
+    writer.close()
+
+
 def main():
+    global mean, std
     args = parse_args()
     if args.deterministic:
         random.seed(0)
@@ -121,12 +166,15 @@ def main():
     }
 
     model = models.ResNet18(args.num_patches, args.num_angles)
-    model, best_val_accuracy = train.ssl_train(device, model, dataloaders, args.ssl_num_epochs,
-                                               args.num_patches, args.num_angles, mean, std,
-                                               args.learn_prd, args.poisson_rate)
-    model_name = time.ctime().replace(" ", "_").replace(":", "_")
-    model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
-    torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))
+    model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{args.model_name}")))
+    gen_grad_map(device, model, dataloaders, args.num_patches, args.num_angles)
+
+    # model, best_val_accuracy = train.ssl_train(device, model, dataloaders, args.ssl_num_epochs,
+    #                                            args.num_patches, args.num_angles, mean, std,
+    #                                            args.learn_prd, args.poisson_rate)
+    # model_name = time.ctime().replace(" ", "_").replace(":", "_")
+    # model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
+    # torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))
 
 
 if __name__ == '__main__':
