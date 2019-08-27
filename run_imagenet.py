@@ -158,7 +158,7 @@ def main_worker(gpu, ngpus_per_node, args):
             best_acc = checkpoint['best_acc']
             args.poisson_rate = checkpoint["poisson_rate"]
             model.load_state_dict(checkpoint['state_dict'])
-            optimiser.load_state_dict(checkpoint['optimizer'])
+            optimiser.load_state_dict(checkpoint['optimiser'])
             print("=> loaded checkpoint '{}' (epoch {})"
                   .format(args.resume, checkpoint['epoch']))
         else:
@@ -218,7 +218,7 @@ def main_worker(gpu, ngpus_per_node, args):
                 'epoch': epoch + 1,
                 'state_dict': model.state_dict(),
                 'best_acc': best_acc,
-                'optimizer': optimiser.state_dict(),
+                'optimiser': optimiser.state_dict(),
                 "poisson_rate": args.poisson_rate
             }, is_best)
 
@@ -325,10 +325,10 @@ def validate(val_loader, model, criterion, args):
     return losses.avg, top1.avg
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth'):
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth')
+        shutil.copyfile(filename, 'model_best.pth.tar')
 
 
 class AverageMeter(object):
