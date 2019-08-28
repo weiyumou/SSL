@@ -114,7 +114,7 @@ def main():
     # model = models.SimpleConv(args.num_patches, args.num_angles)
     # model = models.DRN_A_18(args.num_patches, args.num_angles)
     # model = models.VGG11(args.num_patches, args.num_angles)
-    # model = models.DenseNet201(args.num_patches, args.num_angles)
+    # model = models.ResNext50(args.num_patches, args.num_angles)
     model = torch.nn.DataParallel(model)
 
     if args.do_ssl:
@@ -136,7 +136,8 @@ def main():
 
         # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{args.model_name}")))
         # dataloaders["train"].dataset.set_poisson_rate(args.poisson_rate)
-        # train.gen_grad_map(device, model, dataloaders, args.num_patches, args.num_angles)
+        # args.mean, args.std = mean, std
+        # train.gen_grad_map(device, model, dataloaders["val"], args)
 
         model, best_val_accuracy = train.ssl_train(device, model, dataloaders, args)
         model_name = time.ctime().replace(" ", "_").replace(":", "_")

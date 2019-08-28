@@ -53,7 +53,8 @@ class ResNet18(nn.Module):
         for m in self.fc.modules():
             if isinstance(m, nn.Linear):
                 nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.constant_(m.bias, 0)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm1d):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
@@ -65,6 +66,23 @@ class ResNet50(ResNet18):
         super(ResNet50, self).__init__(num_patches, num_angles)
 
         self.backend = torchvision.models.resnet50()
+        self.backend.fc = nn.Identity()
+        self.fc = nn.Sequential(
+            Flatten(),
+            nn.Linear(in_features=2048, out_features=1024, bias=False),
+            nn.BatchNorm1d(num_features=1024),
+            nn.ReLU(),
+            nn.Linear(in_features=1024, out_features=num_patches * num_angles)
+        )
+        self._initialise_fc()
+
+
+class ResNext50(ResNet18):
+
+    def __init__(self, num_patches, num_angles):
+        super(ResNext50, self).__init__(num_patches, num_angles)
+
+        self.backend = torchvision.models.resnext50_32x4d()
         self.backend.fc = nn.Identity()
         self.fc = nn.Sequential(
             Flatten(),

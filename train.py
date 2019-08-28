@@ -117,17 +117,18 @@ def retrieve_topk_images(device, model, query_img, dataloader, mean, std, k=16):
     return top_images, list(reversed(top_labels))
 
 
-def gen_grad_map(device, model, dataloaders, args):
+def gen_grad_map(device, model, dataloader, args):
     writer = SummaryWriter()
     model = model.to(device)
     criterion = nn.CrossEntropyLoss().to(device)
 
-    model.train()
-    train_iter = iter(dataloaders["train"])
-    inputs, rotations, perms = next(train_iter)
+    model.eval()
+    data_iter = iter(dataloader)
+    inputs, rotations, perms = next(data_iter)
     with torch.no_grad():
         inputs, labels = random_rotate(inputs, args.num_patches, rotations, perms)
 
+    writer.add_images("Input", utils.denormalise(inputs, args.mean, args.std), 0)
     n, c, h, w = inputs.size()
     inputs = inputs.to(device).requires_grad_()
     labels = labels.to(device)
