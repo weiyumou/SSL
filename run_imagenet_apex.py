@@ -42,9 +42,11 @@ def parse_args():
                         help='manual epoch number (useful on restarts)')
     parser.add_argument('-b', '--batch-size', default=256, type=int,
                         metavar='N', help='mini-batch size per process (default: 256)')
-    parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+    parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float,
                         metavar='LR',
-                        help='Initial learning rate. Will be scaled by <global batch size>/256: args.lr = args.lr*float(args.batch_size*args.world_size)/256.  A warmup schedule will also be applied over the first 5 epochs.')
+                        help='Initial learning rate. Will be scaled by <global batch size>/256: '
+                             'args.lr = args.lr*float(args.batch_size*args.world_size)/256.  '
+                             'A warmup schedule will also be applied over the first 5 epochs.')
     parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                         help='momentum')
     parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
@@ -55,8 +57,6 @@ def parse_args():
                         help='path to latest checkpoint (default: none)')
     parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
                         help='evaluate model on validation set')
-    parser.add_argument('--prof', default=-1, type=int,
-                        help='Only run 10 iterations for profiling.')
     parser.add_argument('--deterministic', action='store_true')
 
     parser.add_argument("--local_rank", default=0, type=int)
@@ -132,20 +132,20 @@ def main():
     if 'WORLD_SIZE' in os.environ:
         args.distributed = int(os.environ['WORLD_SIZE']) > 1
 
+    print(f"Distributed Training Enabled: {args.distributed}")
     args.gpu = 0
     args.world_size = 1
 
     if args.distributed:
         args.gpu = args.local_rank
         torch.cuda.set_device(args.gpu)
-        torch.distributed.init_process_group(backend='nccl',
-                                             init_method='env://')
+        torch.distributed.init_process_group(backend='nccl', init_method='env://')
         args.world_size = torch.distributed.get_world_size()
 
     assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
 
     # create model
-    model = models.ResNet50(args.num_patches, args.num_angles)
+    model = models.ResNet18(args.num_patches, args.num_angles)
 
     if args.sync_bn:
         import apex
@@ -179,7 +179,6 @@ def main():
         # delay_allreduce delays all communication to the end of the backward pass.
         model = DDP(model, delay_allreduce=True)
 
-    # define loss function (criterion) and optimiser
     criterion = nn.CrossEntropyLoss().cuda()
 
     # Optionally resume from a checkpoint
@@ -275,20 +274,22 @@ def main():
 
 
 class DataPrefetcher():
-    def __init__(self, loader):
+    def __init__(self, loader, num_patches):
         self.loader = iter(loader)
         self.stream = torch.cuda.Stream()
         self.mean = torch.tensor([0.485 * 255, 0.456 * 255, 0.406 * 255]).cuda().reshape(1, 3, 1, 1)
         self.std = torch.tensor([0.229 * 255, 0.224 * 255, 0.225 * 255]).cuda().reshape(1, 3, 1, 1)
+        self.num_patches = num_patches
         self.preload()
 
     def preload(self):
         try:
-            self.next_input, self.next_rotation, self.next_perm = next(self.loader)
+            next_input, next_rotation, next_perm = next(self.loader)
+            with torch.no_grad():
+                self.next_input, self.next_label = random_rotate(next_input, self.num_patches, next_rotation, next_perm)
         except StopIteration:
             self.next_input = None
-            self.next_rotation = None
-            self.next_perm = None
+            self.next_label = None
             return
         # if record_stream() doesn't work, another option is to make sure device inputs are created
         # on the main stream.
@@ -299,8 +300,7 @@ class DataPrefetcher():
         # self.stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self.stream):
             self.next_input = self.next_input.cuda(non_blocking=True)
-            self.next_rotation = self.next_rotation.cuda(non_blocking=True)
-            self.next_perm = self.next_perm.cuda(non_blocking=True)
+            self.next_label = self.next_label.cuda(non_blocking=True)
             # more code for the alternative if record_stream() doesn't work:
             # copy_ will record the use of the pinned source tensor in this side stream.
             # self.next_input_gpu.copy_(self.next_input, non_blocking=True)
@@ -315,16 +315,13 @@ class DataPrefetcher():
     def next(self):
         torch.cuda.current_stream().wait_stream(self.stream)
         inputs = self.next_input
-        rotations = self.next_rotation
-        perms = self.next_perm
+        labels = self.next_label
         if inputs is not None:
             inputs.record_stream(torch.cuda.current_stream())
-        if rotations is not None:
-            rotations.record_stream(torch.cuda.current_stream())
-        if perms is not None:
-            perms.record_stream(torch.cuda.current_stream())
+        if labels is not None:
+            labels.record_stream(torch.cuda.current_stream())
         self.preload()
-        return inputs, rotations, perms
+        return inputs, labels
 
 
 def train(train_loader, model, criterion, optimiser, epoch, args):
@@ -335,47 +332,22 @@ def train(train_loader, model, criterion, optimiser, epoch, args):
     model.train()
     end = time.time()
 
-    prefetcher = DataPrefetcher(train_loader)
-    inputs, rotations, perms = prefetcher.next()
+    prefetcher = DataPrefetcher(train_loader, args.num_patches)
+    inputs, labels = prefetcher.next()
     i = 0
-    profiling = args.prof >= 0
     while inputs is not None:
         i += 1
-        if profiling and args.prof == i:
-            print("Profiling begun at iteration {}".format(i))
-            torch.cuda.cudart().cudaProfilerStart()
 
-        if profiling:
-            torch.cuda.nvtx.range_push("Body of iteration {}".format(i))
-
-        with torch.no_grad():
-            inputs, labels = random_rotate(inputs, args.num_patches, rotations, perms)
-
-        # compute output
-        if profiling:
-            torch.cuda.nvtx.range_push("forward")
         outputs = model(inputs)
         outputs = outputs.reshape(-1, args.num_angles)
-
-        if profiling:
-            torch.cuda.nvtx.range_pop()
         loss = criterion(outputs, labels)
 
-        # compute gradient and do SGD step
         optimiser.zero_grad()
-
-        if profiling:
-            torch.cuda.nvtx.range_push("backward")
         with amp.scale_loss(loss, optimiser) as scaled_loss:
             scaled_loss.backward()
-        if profiling:
-            torch.cuda.nvtx.range_pop()
-
-        if profiling:
-            torch.cuda.nvtx.range_push("optimiser.step()")
         optimiser.step()
-        if profiling:
-            torch.cuda.nvtx.range_pop()
+
+        inputs, labels = prefetcher.next()
 
         if i % args.print_freq == 0:
             # Every print_freq iterations, check the loss, accuracy, and speed.
@@ -410,20 +382,6 @@ def train(train_loader, model, criterion, optimiser, epoch, args):
                     args.world_size * args.batch_size / batch_time.avg,
                     batch_time=batch_time,
                     loss=losses, top1=top1))
-        if profiling:
-            torch.cuda.nvtx.range_push("prefetcher.next()")
-        inputs, rotations, perms = prefetcher.next()
-        if profiling:
-            torch.cuda.nvtx.range_pop()
-
-        # Pop range "Body of iteration {}".format(i)
-        if profiling:
-            torch.cuda.nvtx.range_pop()
-
-        if profiling and i == args.prof + 10:
-            print("Profiling ended at iteration {}".format(i))
-            torch.cuda.cudart().cudaProfilerStop()
-            quit()
 
     return losses.avg, top1.avg
 
@@ -436,14 +394,13 @@ def validate(val_loader, model, criterion, args):
     model.eval()
     end = time.time()
 
-    prefetcher = DataPrefetcher(val_loader)
-    inputs, rotations, perms = prefetcher.next()
+    prefetcher = DataPrefetcher(val_loader, args.num_patches)
+    inputs, labels = prefetcher.next()
     i = 0
     while inputs is not None:
         i += 1
         # compute output
         with torch.no_grad():
-            inputs, labels = random_rotate(inputs, args.num_patches, rotations, perms)
             outputs = model(inputs)
             outputs = outputs.reshape(-1, args.num_angles)
             loss = criterion(outputs, labels)
@@ -465,6 +422,8 @@ def validate(val_loader, model, criterion, args):
         batch_time.update(time.time() - end)
         end = time.time()
 
+        inputs, labels = prefetcher.next()
+
         if args.local_rank == 0 and i % args.print_freq == 0:
             print('Test: [{0}/{1}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
@@ -476,8 +435,6 @@ def validate(val_loader, model, criterion, args):
                 args.world_size * args.batch_size / batch_time.avg,
                 batch_time=batch_time, loss=losses,
                 top1=top1))
-
-        inputs, rotations, perms = prefetcher.next()
 
     print(' * Acc {top1.avg:.3f}'.format(top1=top1))
 

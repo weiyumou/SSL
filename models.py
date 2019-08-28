@@ -18,7 +18,7 @@ class ResNet18(nn.Module):
         self.backend.fc = nn.Identity()
         self.fc = nn.Sequential(
             Flatten(),
-            nn.Linear(in_features=512, out_features=1024),
+            nn.Linear(in_features=512, out_features=1024, bias=False),
             nn.BatchNorm1d(num_features=1024),
             nn.ReLU(),
             nn.Linear(in_features=1024, out_features=num_patches * num_angles)
@@ -68,7 +68,7 @@ class ResNet50(ResNet18):
         self.backend.fc = nn.Identity()
         self.fc = nn.Sequential(
             Flatten(),
-            nn.Linear(in_features=2048, out_features=1024),
+            nn.Linear(in_features=2048, out_features=1024, bias=False),
             nn.BatchNorm1d(num_features=1024),
             nn.ReLU(),
             nn.Linear(in_features=1024, out_features=num_patches * num_angles)
