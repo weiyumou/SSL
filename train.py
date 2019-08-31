@@ -4,25 +4,23 @@ import queue
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
 import tqdm
-from ranger import Ranger
 from torch.utils.tensorboard import SummaryWriter
 
 import utils
-from data import random_rotate
+from data import random_rotate, DataPrefetcher
+from ranger import Ranger
+from utils import AverageMeter, reduce_tensor
 
 
 def ssl_train(device, model, dataloaders, args):
     model = model.to(device)
-    # optimiser = optim.Adam(model.parameters())
     optimiser = Ranger(model.parameters())
     criterion = nn.CrossEntropyLoss()
     writer = SummaryWriter()
 
     best_model_wts = copy.deepcopy(model.state_dict())
     best_val_accuracy = 1 / args.num_angles
-    dataloaders["train"].dataset.set_poisson_rate(args.poisson_rate)
 
     for epoch in range(args.ssl_num_epochs):
         for phase in ["train", "val"]:
@@ -158,3 +156,66 @@ def gen_grad_map(device, model, dataloader, args):
         writer.add_images(f"Grad_Map/{image_idx}", image_grads, 0)
 
     writer.close()
+
+
+def apex_train(train_loader, model, criterion, optimiser, args):
+    try:
+        from apex import amp
+    except ImportError:
+        args.use_apex = False
+    losses = AverageMeter()
+    top1 = AverageMeter()
+
+    model.train()
+    prefetcher = DataPrefetcher(train_loader, args.num_patches, args.mean, args.std, args.scale)
+    for i, (inputs, labels) in tqdm.tqdm(enumerate(prefetcher), desc="SSL Training", total=len(train_loader)):
+        outputs = model(inputs)
+        outputs = outputs.reshape(-1, args.num_angles)
+        loss = criterion(outputs, labels)
+
+        optimiser.zero_grad()
+        if args.use_apex:
+            with amp.scale_loss(loss, optimiser) as scaled_loss:
+                scaled_loss.backward()
+        else:
+            loss.backward()
+        optimiser.step()
+
+        if i % args.print_freq == 0:
+            preds = torch.argmax(outputs, dim=1)
+            corrects = torch.sum(preds == labels).item()
+            acc = corrects / labels.numel()
+            if args.distributed:
+                reduced_loss = reduce_tensor(loss.data, args)
+            else:
+                reduced_loss = loss.data
+            losses.update(reduced_loss.item(), labels.numel())
+            top1.update(acc, labels.numel())
+            torch.cuda.synchronize()
+
+    return losses.avg, top1.avg
+
+
+def apex_validate(val_loader, model, criterion, args):
+    losses = AverageMeter()
+    top1 = AverageMeter()
+
+    model.eval()
+    prefetcher = DataPrefetcher(val_loader, args.num_patches, args.mean, args.std, args.scale)
+    for inputs, labels in tqdm.tqdm(prefetcher, desc="SSL Evaluating", total=len(val_loader)):
+        with torch.no_grad():
+            outputs = model(inputs)
+            outputs = outputs.reshape(-1, args.num_angles)
+            loss = criterion(outputs, labels)
+
+        preds = torch.argmax(outputs, dim=1)
+        corrects = torch.sum(preds == labels).item()
+        acc = corrects / labels.numel()
+        if args.distributed:
+            reduced_loss = reduce_tensor(loss.data, args)
+        else:
+            reduced_loss = loss
+        losses.update(reduced_loss.item(), labels.numel())
+        top1.update(acc, labels.numel())
+
+    return losses.avg, top1.avg

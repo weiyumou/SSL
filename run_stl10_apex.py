@@ -9,8 +9,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torchvision.datasets as datasets
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import Subset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 import models
@@ -73,15 +72,19 @@ def parse_args():
                         type=int,
                         help='The initial poisson rate lambda',
                         default=2)
+    parser.add_argument('--do_ssl',
+                        help='Whether to do SSL',
+                        action="store_true")
+    parser.add_argument('--download',
+                        help='Whether to download datasets',
+                        action="store_true")
     return parser.parse_args()
 
 
-cudnn.benchmark = True
-
 best_acc = 0
 use_apex = True
-mean = (0.485, 0.456, 0.406)
-std = (0.229, 0.224, 0.225)
+mean = (0.4226, 0.4120, 0.3636)
+std = (0.2615, 0.2545, 0.2571)
 scale = 255
 
 try:
@@ -181,83 +184,74 @@ def main():
 
         resume()
 
-    # Data loading code
-    train_dir = os.path.join(args.data, 'train')
-    val_dir = os.path.join(args.data, 'val')
+    if args.do_ssl:
+        stl_unlabeled = datasets.STL10(root=args.data, split='unlabeled', download=args.download)
+        indices = list(range(len(stl_unlabeled)))
+        train_indices = indices[:int(len(indices) * 0.9)]
+        val_indices = indices[int(len(indices) * 0.9):]
+        train_dataset = SSLTrainDataset(Subset(stl_unlabeled, train_indices), args.num_patches, args.num_angles,
+                                        args.poisson_rate)
+        val_dataset = SSLValDataset(Subset(stl_unlabeled, val_indices), args.num_patches, args.num_angles)
 
-    crop_size = 225
-    val_size = 256
-
-    imagenet_train = datasets.ImageFolder(root=train_dir,
-                                          transform=transforms.Compose([
-                                              transforms.RandomResizedCrop(crop_size),
-                                          ]))
-    train_dataset = SSLTrainDataset(imagenet_train, args.num_patches, args.num_angles, args.poisson_rate)
-    imagenet_val = datasets.ImageFolder(root=val_dir,
-                                        transform=transforms.Compose([
-                                            transforms.Resize(val_size),
-                                            transforms.CenterCrop(crop_size),
-                                        ]))
-    val_dataset = SSLValDataset(imagenet_val, args.num_patches, args.num_angles)
-
-    train_sampler = None
-    val_sampler = None
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
-
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
-                              num_workers=args.workers, pin_memory=True, sampler=train_sampler, collate_fn=fast_collate)
-
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
-                            num_workers=args.workers, pin_memory=True, sampler=val_sampler, collate_fn=fast_collate)
-
-    if args.evaluate:
-        val_loss, val_acc = apex_validate(val_loader, model, criterion, args)
-        utils.logger.info(f"Val Loss = {val_loss}, Val Accuracy = {val_acc}")
-        return
-
-    # Create dir to save model and command-line args
-    model_dir = time.ctime().replace(" ", "_").replace(":", "_")
-    model_dir = os.path.join("models", model_dir)
-    os.makedirs(model_dir, exist_ok=True)
-    with open(os.path.join(model_dir, "args.json"), "w") as f:
-        json.dump(args.__dict__, f, indent=2)
-
-    writer = SummaryWriter()
-    for epoch in range(args.start_epoch, args.epochs):
+        train_sampler = None
+        val_sampler = None
         if args.distributed:
-            train_sampler.set_epoch(epoch)
+            train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+            val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
 
-        # train for one epoch
-        train_loss, train_acc = apex_train(train_loader, model, criterion, optimiser, args)
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+                                  num_workers=args.workers, pin_memory=True, sampler=train_sampler,
+                                  collate_fn=fast_collate)
 
-        # evaluate on validation set
-        val_loss, val_acc = apex_validate(val_loader, model, criterion, args)
+        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False,
+                                num_workers=args.workers, pin_memory=True, sampler=val_sampler, collate_fn=fast_collate)
 
-        if (epoch + 1) % args.learn_prd == 0:
-            args.poisson_rate += 1
-            train_loader.dataset.set_poisson_rate(args.poisson_rate)
+        if args.evaluate:
+            val_loss, val_acc = apex_validate(val_loader, model, criterion, args)
+            utils.logger.info(f"Val Loss = {val_loss}, Val Accuracy = {val_acc}")
+            return
 
-        # remember best Acc and save checkpoint
-        if args.local_rank == 0:
-            is_best = val_acc > best_acc
-            best_acc = max(val_acc, best_acc)
-            save_checkpoint({
-                'epoch': epoch + 1,
-                'state_dict': model.state_dict(),
-                'best_acc': best_acc,
-                'optimiser': optimiser.state_dict(),
-                "poisson_rate": args.poisson_rate
-            }, is_best, model_dir)
+        # Create dir to save model and command-line args
+        model_dir = time.ctime().replace(" ", "_").replace(":", "_")
+        model_dir = os.path.join("models", model_dir)
+        os.makedirs(model_dir, exist_ok=True)
+        with open(os.path.join(model_dir, "args.json"), "w") as f:
+            json.dump(args.__dict__, f, indent=2)
 
-            utils.logger.info(f"Epoch {epoch}: Train Loss = {train_loss}, Train Accuracy = {train_acc}")
-            utils.logger.info(f"Epoch {epoch}: Val Loss = {val_loss}, Val Accuracy = {val_acc}")
-            writer.add_scalars("Loss", {"train_loss": train_loss, "val_loss": val_loss}, epoch)
-            writer.add_scalars("Accuracy", {"train_acc": train_acc, "val_acc": val_acc}, epoch)
-            writer.add_scalar("Poisson_Rate", train_loader.dataset.pdist.rate, epoch)
+        writer = SummaryWriter()
+        for epoch in range(args.start_epoch, args.epochs):
+            if args.distributed:
+                train_sampler.set_epoch(epoch)
 
-    writer.close()
+            # train for one epoch
+            train_loss, train_acc = apex_train(train_loader, model, criterion, optimiser, args)
+
+            # evaluate on validation set
+            val_loss, val_acc = apex_validate(val_loader, model, criterion, args)
+
+            if (epoch + 1) % args.learn_prd == 0:
+                args.poisson_rate += 1
+                train_loader.dataset.set_poisson_rate(args.poisson_rate)
+
+            # remember best Acc and save checkpoint
+            if args.local_rank == 0:
+                is_best = val_acc > best_acc
+                best_acc = max(val_acc, best_acc)
+                save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': model.state_dict(),
+                    'best_acc': best_acc,
+                    'optimiser': optimiser.state_dict(),
+                    "poisson_rate": args.poisson_rate
+                }, is_best, model_dir)
+
+                utils.logger.info(f"Epoch {epoch}: Train Loss = {train_loss}, Train Accuracy = {train_acc}")
+                utils.logger.info(f"Epoch {epoch}: Val Loss = {val_loss}, Val Accuracy = {val_acc}")
+                writer.add_scalars("Loss", {"train_loss": train_loss, "val_loss": val_loss}, epoch)
+                writer.add_scalars("Accuracy", {"train_acc": train_acc, "val_acc": val_acc}, epoch)
+                writer.add_scalar("Poisson_Rate", train_loader.dataset.pdist.rate, epoch)
+
+        writer.close()
 
 
 if __name__ == '__main__':

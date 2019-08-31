@@ -1,8 +1,11 @@
 import logging
+import os
+import shutil
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from torch import distributed as dist
 
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
                     datefmt='%m/%d/%Y %H:%M:%S',
@@ -57,3 +60,36 @@ def denormalise(images, mean, std, batched=True):
     for c in range(num_channels):
         denom_images[:, c, :, :] = images[:, c, :, :] * std[c] + mean[c]
     return denom_images
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def reduce_tensor(tensor, args):
+    rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.reduce_op.SUM)
+    rt /= args.world_size
+    return rt
+
+
+def save_checkpoint(state, is_best, model_dir):
+    filename = os.path.join(model_dir, "checkpoint.pth.tar")
+    torch.save(state, filename)
+    if is_best:
+        shutil.copyfile(filename, os.path.join(model_dir, "model_best.pth.tar"))

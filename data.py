@@ -1,6 +1,7 @@
 import math
 import random
 
+import numpy as np
 import torch
 from torch.distributions.poisson import Poisson
 from torch.nn import functional as F
@@ -66,13 +67,13 @@ def k_permute(n, k, ds):
 
 
 class SSLTrainDataset(Dataset):
-    def __init__(self, train_dataset, num_patches, num_angles) -> None:
+    def __init__(self, train_dataset, num_patches, num_angles, poisson_rate) -> None:
         super(SSLTrainDataset, self).__init__()
         self.train_dataset = train_dataset
         self.num_patches = num_patches
         self.num_angles = num_angles
         self.ds = calc_dn(num_patches)
-        self.pdist = Poisson(rate=1)
+        self.pdist = Poisson(rate=poisson_rate)
 
     def __getitem__(self, index: int):
         rotation = torch.empty(self.num_patches, dtype=torch.long).random_(self.num_angles)
@@ -123,3 +124,48 @@ def random_rotate(images, num_patches, rotations, perms=None):
     patches = patches.reshape(n, -1, num_patches)
     images = F.fold(patches, output_size=img_h, kernel_size=patch_size, stride=patch_size)
     return images, torch.flatten(rotations)
+
+
+def fast_collate(batch):
+    images, rotations, perms = list(zip(*batch))
+    img_tensors = []
+    for img in images:
+        nump_array = np.asarray(img, dtype=np.float)
+        if nump_array.ndim < 3:
+            nump_array = np.expand_dims(nump_array, axis=-1)
+        nump_array = np.rollaxis(nump_array, 2)
+        img_tensors.append(torch.from_numpy(nump_array))
+
+    images = torch.stack(img_tensors, dim=0).float()
+    rotations = torch.stack(rotations, dim=0)
+    perms = torch.stack(perms, dim=0)
+    return images, rotations, perms
+
+
+class DataPrefetcher():
+    def __init__(self, loader, num_patches, mean, std, scale=255):
+        self.loader = iter(loader)
+        self.stream = torch.cuda.Stream()
+        self.mean = torch.tensor([num * scale for num in mean]).cuda().reshape(1, 3, 1, 1)
+        self.std = torch.tensor([num * scale for num in std]).cuda().reshape(1, 3, 1, 1)
+        self.num_patches = num_patches
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        torch.cuda.current_stream().wait_stream(self.stream)
+        inputs, labels = self.preload()
+        inputs.record_stream(torch.cuda.current_stream())
+        labels.record_stream(torch.cuda.current_stream())
+        return inputs, labels
+
+    def preload(self):
+        images, rotations, perms = next(self.loader)
+        with torch.no_grad():
+            inputs, labels = random_rotate(images, self.num_patches, rotations, perms)
+        with torch.cuda.stream(self.stream):
+            inputs = inputs.cuda(non_blocking=True)
+            labels = labels.cuda(non_blocking=True)
+            inputs = inputs.sub_(self.mean).div_(self.std)
+        return inputs, labels

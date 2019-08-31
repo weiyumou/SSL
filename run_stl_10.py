@@ -127,7 +127,8 @@ def main():
         val_indices = indices[int(len(indices) * 0.9):]
         dataloaders = {
             "train": DataLoader(
-                SSLTrainDataset(Subset(stl_unlabeled, train_indices), args.num_patches, args.num_angles),
+                SSLTrainDataset(Subset(stl_unlabeled, train_indices), args.num_patches, args.num_angles,
+                                args.poisson_rate),
                 shuffle=True, batch_size=args.ssl_train_batch_size, pin_memory=True),
             "val": DataLoader(
                 SSLValDataset(Subset(stl_unlabeled, val_indices), args.num_patches, args.num_angles),
