@@ -134,7 +134,7 @@ def main_worker(gpu, ngpus_per_node, args):
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
     # create model
-    model = models.ResNet50(args.num_patches, args.num_angles)
+    model = models.ResNet18(args.num_patches, args.num_angles)
 
     if args.distributed:
         model.cuda()
