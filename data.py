@@ -130,7 +130,7 @@ def fast_collate(batch):
     images, rotations, perms = list(zip(*batch))
     img_tensors = []
     for img in images:
-        nump_array = np.asarray(img, dtype=np.float)
+        nump_array = np.asarray(img, dtype=np.uint8)
         if nump_array.ndim < 3:
             nump_array = np.expand_dims(nump_array, axis=-1)
         nump_array = np.rollaxis(nump_array, 2)
@@ -167,5 +167,5 @@ class DataPrefetcher():
         with torch.cuda.stream(self.stream):
             inputs = inputs.cuda(non_blocking=True)
             labels = labels.cuda(non_blocking=True)
-            inputs = inputs.sub_(self.mean).div_(self.std)
+            inputs = inputs.sub(self.mean).div(self.std)
         return inputs, labels
