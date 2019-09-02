@@ -209,7 +209,8 @@ def main():
 
         if args.evaluate:
             val_loss, val_acc = apex_validate(val_loader, model, criterion, args)
-            utils.logger.info(f"Val Loss = {val_loss}, Val Accuracy = {val_acc}")
+            if args.is_master:
+                utils.logger.info(f"Val Loss = {val_loss}, Val Accuracy = {val_acc}")
             return
 
         # Create dir to save model and command-line args
