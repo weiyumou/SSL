@@ -1,6 +1,7 @@
 import copy
 import math
 import queue
+import time
 
 import torch
 import torch.nn as nn
@@ -158,17 +159,20 @@ def gen_grad_map(device, model, dataloader, args):
     writer.close()
 
 
-def apex_train(train_loader, model, criterion, optimiser, args):
+def apex_train(train_loader, model, criterion, optimiser, args, epoch):
     try:
         from apex import amp
     except ImportError:
         raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
+
+    batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
 
     model.train()
+    end = time.time()
     prefetcher = DataPrefetcher(train_loader, args.num_patches, args.mean, args.std, args.scale)
-    for i, (inputs, labels) in tqdm.tqdm(enumerate(prefetcher), desc="SSL Training", total=len(train_loader)):
+    for i, (inputs, labels) in enumerate(prefetcher):
         outputs = model(inputs)
         outputs = outputs.reshape(-1, args.num_angles)
         loss = criterion(outputs, labels)
@@ -191,16 +195,34 @@ def apex_train(train_loader, model, criterion, optimiser, args):
             losses.update(reduced_loss.item(), labels.numel())
             top1.update(reduced_acc.item(), labels.numel())
 
+            torch.cuda.synchronize()
+            batch_time.update((time.time() - end) / args.print_freq)
+            end = time.time()
+
+            if args.is_master:
+                print('Epoch: [{0}][{1}/{2}]\t'
+                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      'Speed {3:.3f} ({4:.3f})\t'
+                      'Loss {loss.val:.10f} ({loss.avg:.4f})\t'
+                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'.format(
+                    epoch, i, len(train_loader),
+                    args.world_size * args.batch_size / batch_time.val,
+                    args.world_size * args.batch_size / batch_time.avg,
+                    batch_time=batch_time,
+                    loss=losses, top1=top1))
+
     return losses.avg, top1.avg
 
 
 def apex_validate(val_loader, model, criterion, args):
+    batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
 
     model.eval()
+    end = time.time()
     prefetcher = DataPrefetcher(val_loader, args.num_patches, args.mean, args.std, args.scale)
-    for inputs, labels in tqdm.tqdm(prefetcher, desc="SSL Evaluating", total=len(val_loader)):
+    for i, (inputs, labels) in enumerate(prefetcher):
         with torch.no_grad():
             outputs = model(inputs)
             outputs = outputs.reshape(-1, args.num_angles)
@@ -217,5 +239,21 @@ def apex_validate(val_loader, model, criterion, args):
             reduced_acc = acc.data
         losses.update(reduced_loss.item(), labels.numel())
         top1.update(reduced_acc.item(), labels.numel())
+
+        torch.cuda.synchronize()
+        batch_time.update(time.time() - end)
+        end = time.time()
+
+        if args.is_master and i % args.print_freq == 0:
+            print('Test: [{0}/{1}]\t'
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'Speed {2:.3f} ({3:.3f})\t'
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'.format(
+                i, len(val_loader),
+                args.world_size * args.batch_size / batch_time.val,
+                args.world_size * args.batch_size / batch_time.avg,
+                batch_time=batch_time, loss=losses,
+                top1=top1))
 
     return losses.avg, top1.avg

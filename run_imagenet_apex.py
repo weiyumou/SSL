@@ -198,7 +198,7 @@ def main():
     val_sampler = None
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
                               num_workers=args.workers, pin_memory=True, sampler=train_sampler, collate_fn=fast_collate)
@@ -225,7 +225,7 @@ def main():
             train_sampler.set_epoch(epoch)
 
         # train for one epoch
-        train_loss, train_acc = apex_train(train_loader, model, criterion, optimiser, args)
+        train_loss, train_acc = apex_train(train_loader, model, criterion, optimiser, args, epoch)
 
         # evaluate on validation set
         val_loss, val_acc = apex_validate(val_loader, model, criterion, args)
@@ -245,8 +245,6 @@ def main():
                 "poisson_rate": args.poisson_rate
             }, is_best, model_dir)
 
-            utils.logger.info(f"Epoch {epoch}: Train Loss = {train_loss}, Train Accuracy = {train_acc}")
-            utils.logger.info(f"Epoch {epoch}: Val Loss = {val_loss}, Val Accuracy = {val_acc}")
             writer.add_scalars("Loss", {"train_loss": train_loss, "val_loss": val_loss}, epoch)
             writer.add_scalars("Accuracy", {"train_acc": train_acc, "val_acc": val_acc}, epoch)
             writer.add_scalar("Poisson_Rate", train_loader.dataset.pdist.rate, epoch)
