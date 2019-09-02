@@ -162,7 +162,7 @@ def apex_train(train_loader, model, criterion, optimiser, args):
     try:
         from apex import amp
     except ImportError:
-        args.use_apex = False
+        raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
     losses = AverageMeter()
     top1 = AverageMeter()
 
@@ -174,24 +174,22 @@ def apex_train(train_loader, model, criterion, optimiser, args):
         loss = criterion(outputs, labels)
 
         optimiser.zero_grad()
-        if args.use_apex:
-            with amp.scale_loss(loss, optimiser) as scaled_loss:
-                scaled_loss.backward()
-        else:
-            loss.backward()
+        with amp.scale_loss(loss, optimiser) as scaled_loss:
+            scaled_loss.backward()
         optimiser.step()
 
         if i % args.print_freq == 0:
             preds = torch.argmax(outputs, dim=1)
-            corrects = torch.sum(preds == labels).item()
+            corrects = torch.sum(preds == labels, dim=0, keepdim=True, dtype=torch.float)
             acc = corrects / labels.numel()
             if args.distributed:
-                reduced_loss = reduce_tensor(loss.data, args)
+                reduced_loss = reduce_tensor(loss.data, args.world_size)
+                reduced_acc = reduce_tensor(acc.data, args.world_size)
             else:
                 reduced_loss = loss.data
+                reduced_acc = acc.data
             losses.update(reduced_loss.item(), labels.numel())
-            top1.update(acc, labels.numel())
-            torch.cuda.synchronize()
+            top1.update(reduced_acc.item(), labels.numel())
 
     return losses.avg, top1.avg
 
@@ -209,13 +207,15 @@ def apex_validate(val_loader, model, criterion, args):
             loss = criterion(outputs, labels)
 
         preds = torch.argmax(outputs, dim=1)
-        corrects = torch.sum(preds == labels).item()
+        corrects = torch.sum(preds == labels, dim=0, keepdim=True, dtype=torch.float)
         acc = corrects / labels.numel()
         if args.distributed:
-            reduced_loss = reduce_tensor(loss.data, args)
+            reduced_loss = reduce_tensor(loss.data, args.world_size)
+            reduced_acc = reduce_tensor(acc.data, args.world_size)
         else:
-            reduced_loss = loss
+            reduced_loss = loss.data
+            reduced_acc = acc.data
         losses.update(reduced_loss.item(), labels.numel())
-        top1.update(acc, labels.numel())
+        top1.update(reduced_acc.item(), labels.numel())
 
     return losses.avg, top1.avg

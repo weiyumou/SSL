@@ -79,7 +79,6 @@ def parse_args():
 cudnn.benchmark = True
 
 best_acc = 0
-use_apex = True
 mean = (0.485, 0.456, 0.406)
 std = (0.229, 0.224, 0.225)
 scale = 255
@@ -90,20 +89,15 @@ try:
     from apex import amp, optimizers
     from apex.multi_tensor_apply import multi_tensor_applier
 except ImportError:
-    use_apex = False
+    raise ImportError("Please install apex from https://www.github.com/nvidia/apex to run this example.")
 
 
 def main():
-    global best_acc, use_apex, mean, std, scale
+    global best_acc, mean, std, scale
 
     args = parse_args()
-    args.mean, args.std, args.scale, args.use_apex = mean, std, scale, use_apex
-
-    if args.use_apex:
-        print("opt_level = {}".format(args.opt_level))
-        print("keep_batchnorm_fp32 = {}".format(args.keep_batchnorm_fp32), type(args.keep_batchnorm_fp32))
-        print("loss_scale = {}".format(args.loss_scale), type(args.loss_scale))
-        print("\nCUDNN VERSION: {}\n".format(torch.backends.cudnn.version()))
+    args.mean, args.std, args.scale = mean, std, scale
+    args.is_master = args.local_rank == 0
 
     if args.deterministic:
         cudnn.deterministic = True
@@ -113,10 +107,15 @@ def main():
 
     args.distributed = False
     if 'WORLD_SIZE' in os.environ:
-        args.distributed = int(os.environ['WORLD_SIZE']) > 1 and args.use_apex
+        args.distributed = int(os.environ['WORLD_SIZE']) > 1
 
-    print(f"Use Apex: {args.use_apex}")
-    print(f"Distributed Training Enabled: {args.distributed}")
+    if args.is_master:
+        print("opt_level = {}".format(args.opt_level))
+        print("keep_batchnorm_fp32 = {}".format(args.keep_batchnorm_fp32), type(args.keep_batchnorm_fp32))
+        print("loss_scale = {}".format(args.loss_scale), type(args.loss_scale))
+        print("\nCUDNN VERSION: {}\n".format(torch.backends.cudnn.version()))
+        print(f"Distributed Training Enabled: {args.distributed}")
+
     args.gpu = 0
     args.world_size = 1
 
@@ -126,10 +125,9 @@ def main():
         torch.distributed.init_process_group(backend='nccl', init_method='env://')
         args.world_size = torch.distributed.get_world_size()
         # Scale learning rate based on global batch size
-        args.lr *= args.batch_size * args.world_size / 256
+        # args.lr *= args.batch_size * args.world_size / 256
 
-    if args.use_apex:
-        assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
+    assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
 
     # create model
     model = models.ResNet18(args.num_patches, args.num_angles)
@@ -145,12 +143,11 @@ def main():
 
     # Initialize Amp.  Amp accepts either values or strings for the optional override arguments,
     # for convenient interoperation with argparse.
-    if args.use_apex:
-        model, optimiser = amp.initialize(model, optimiser,
-                                          opt_level=args.opt_level,
-                                          keep_batchnorm_fp32=args.keep_batchnorm_fp32,
-                                          loss_scale=args.loss_scale
-                                          )
+    model, optimiser = amp.initialize(model, optimiser,
+                                      opt_level=args.opt_level,
+                                      keep_batchnorm_fp32=args.keep_batchnorm_fp32,
+                                      loss_scale=args.loss_scale
+                                      )
 
     # For distributed training, wrap the model with apex.parallel.DistributedDataParallel.
     # This must be done AFTER the call to amp.initialize.  If model = DDP(model) is called
@@ -158,8 +155,6 @@ def main():
     # the types of model's parameters in a way that disrupts or destroys DDP's allreduce hooks.
     if args.distributed:
         model = DDP(model, delay_allreduce=True)
-    else:
-        model = nn.DataParallel(model)
 
     # Optionally resume from a checkpoint
     if args.resume:
@@ -178,7 +173,6 @@ def main():
                       .format(args.resume, checkpoint['epoch']))
             else:
                 print("=> no checkpoint found at '{}'".format(args.resume))
-
         resume()
 
     # Data loading code
@@ -204,7 +198,7 @@ def main():
     val_sampler = None
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False)
 
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
                               num_workers=args.workers, pin_memory=True, sampler=train_sampler, collate_fn=fast_collate)
@@ -218,13 +212,14 @@ def main():
         return
 
     # Create dir to save model and command-line args
-    model_dir = time.ctime().replace(" ", "_").replace(":", "_")
-    model_dir = os.path.join("models", model_dir)
-    os.makedirs(model_dir, exist_ok=True)
-    with open(os.path.join(model_dir, "args.json"), "w") as f:
-        json.dump(args.__dict__, f, indent=2)
+    if args.is_master:
+        model_dir = time.ctime().replace(" ", "_").replace(":", "_")
+        model_dir = os.path.join("models", model_dir)
+        os.makedirs(model_dir, exist_ok=True)
+        with open(os.path.join(model_dir, "args.json"), "w") as f:
+            json.dump(args.__dict__, f, indent=2)
+        writer = SummaryWriter()
 
-    writer = SummaryWriter()
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             train_sampler.set_epoch(epoch)
@@ -236,11 +231,10 @@ def main():
         val_loss, val_acc = apex_validate(val_loader, model, criterion, args)
 
         if (epoch + 1) % args.learn_prd == 0:
-            args.poisson_rate += 1
-            train_loader.dataset.set_poisson_rate(args.poisson_rate)
+            utils.adj_poisson_rate(train_loader, args)
 
         # remember best Acc and save checkpoint
-        if args.local_rank == 0:
+        if args.is_master:
             is_best = val_acc > best_acc
             best_acc = max(val_acc, best_acc)
             save_checkpoint({
@@ -256,8 +250,6 @@ def main():
             writer.add_scalars("Loss", {"train_loss": train_loss, "val_loss": val_loss}, epoch)
             writer.add_scalars("Accuracy", {"train_acc": train_acc, "val_acc": val_acc}, epoch)
             writer.add_scalar("Poisson_Rate", train_loader.dataset.pdist.rate, epoch)
-
-    writer.close()
 
 
 if __name__ == '__main__':

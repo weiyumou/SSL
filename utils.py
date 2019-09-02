@@ -81,10 +81,10 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def reduce_tensor(tensor, args):
+def reduce_tensor(tensor, world_size):
     rt = tensor.clone()
     dist.all_reduce(rt, op=dist.reduce_op.SUM)
-    rt /= args.world_size
+    rt /= world_size
     return rt
 
 
@@ -93,3 +93,9 @@ def save_checkpoint(state, is_best, model_dir):
     torch.save(state, filename)
     if is_best:
         shutil.copyfile(filename, os.path.join(model_dir, "model_best.pth.tar"))
+
+
+def adj_poisson_rate(data_loader, args):
+    dist.barrier()
+    args.poisson_rate += 1
+    data_loader.dataset.set_poisson_rate(args.poisson_rate)
