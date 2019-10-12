@@ -107,7 +107,7 @@ class SSLValDataset(Dataset):
         return len(self.val_dataset)
 
 
-def random_rotate(images, num_patches, rotations, perms=None):
+def random_rotate(images, num_patches, rotations, perms):
     n, c, img_h, img_w = images.size()
 
     patch_size = int(img_h / math.sqrt(num_patches))
@@ -117,13 +117,12 @@ def random_rotate(images, num_patches, rotations, perms=None):
         for patch_idx in range(num_patches):
             patches[img_idx, :, :, :, patch_idx] = torch.rot90(patches[img_idx, :, :, :, patch_idx],
                                                                rotations[img_idx, patch_idx].item(), [1, 2])
-        if perms is not None:
-            patches[img_idx] = patches[img_idx, :, :, :, perms[img_idx]]
-            rotations[img_idx] = rotations[img_idx, perms[img_idx]]
+        patches[img_idx] = patches[img_idx, :, :, :, perms[img_idx]]
+        rotations[img_idx] = rotations[img_idx, perms[img_idx]]
 
     patches = patches.reshape(n, -1, num_patches)
     images = F.fold(patches, output_size=img_h, kernel_size=patch_size, stride=patch_size)
-    return images, torch.flatten(rotations), torch.flatten(perms)
+    return images
 
 
 def fast_collate(batch):

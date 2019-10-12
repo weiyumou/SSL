@@ -30,15 +30,15 @@ class ResNet18(nn.Module):
 
     def __init__(self, num_patches, num_angles):
         super(ResNet18, self).__init__()
-
+        self.num_conv_features = 512
         self.backend = torchvision.models.resnet18()
         self.backend.fc = nn.Identity()
         self.fc = nn.Sequential(
             Flatten(),
-            nn.Linear(in_features=512, out_features=1024, bias=False),
+            nn.Linear(in_features=self.num_conv_features, out_features=1024, bias=False),
             nn.BatchNorm1d(num_features=1024),
             nn.ReLU(),
-            TwoHeadedFC(fc_in=1024, fc1_out=num_patches * num_angles, fc2_out=num_patches * num_patches)
+            nn.Linear(in_features=1024, out_features=num_patches)
         )
         self._initialise_fc()
 
@@ -62,7 +62,7 @@ class ResNet18(nn.Module):
 
         self.fc = nn.Sequential(
             Flatten(),
-            nn.Linear(in_features=self.fc[1].in_features, out_features=num_classes)
+            nn.Linear(in_features=self.num_conv_features, out_features=num_classes)
         )
         self._initialise_fc()
 

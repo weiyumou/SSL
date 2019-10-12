@@ -17,9 +17,9 @@
 # changed eps to 1e-5 as better default than 1e-8.
 
 import math
+
 import torch
-from torch.optim.optimizer import Optimizer, required
-import itertools as it
+from torch.optim.optimizer import Optimizer
 
 
 class Ranger(Optimizer):
@@ -140,7 +140,7 @@ class Ranger(Optimizer):
                     if N_sma > self.N_sma_threshhold:
                         step_size = math.sqrt(
                             (1 - beta2_t) * (N_sma - 4) / (N_sma_max - 4) * (N_sma - 2) / N_sma * N_sma_max / (
-                                        N_sma_max - 2)) / (1 - beta1 ** state['step'])
+                                    N_sma_max - 2)) / (1 - beta1 ** state['step'])
                     else:
                         step_size = 1.0 / (1 - beta1 ** state['step'])
                     buffered[2] = step_size

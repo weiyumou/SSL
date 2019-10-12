@@ -5,7 +5,9 @@ import time
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import tqdm
+from torch.distributions import Geometric
 from torch.utils.tensorboard import SummaryWriter
 
 import utils
@@ -15,12 +17,13 @@ from utils import AverageMeter, reduce_tensor
 
 
 def ssl_train(device, model, dataloaders, args):
+    num_classes = args.num_patches
     model = model.to(device)
     optimiser = Ranger(model.parameters())
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.KLDivLoss(reduction="batchmean")
+    gm_dist = Geometric(probs=torch.tensor([1 - 1e-3 ** (1 / num_classes)]))
     writer = SummaryWriter()
 
-    num_classes = args.num_patches
     best_model_wts = copy.deepcopy(model.state_dict())
     best_val_accuracy = 1 / num_classes
 
@@ -33,19 +36,18 @@ def ssl_train(device, model, dataloaders, args):
 
             if phase == "train":
                 model.train()
-                continue
             else:
                 model.eval()
 
             for inputs, rotations, perms in tqdm.tqdm(dataloaders[phase], desc=f"SSL {phase}"):
                 with torch.no_grad():
-                    inputs, labels = random_rotate(inputs, args.num_patches, rotations, perms)
+                    inputs = random_rotate(inputs, args.num_patches, rotations, perms)
                 inputs = inputs.to(device)
-                labels = labels.to(device)
+                labels = torch.exp(gm_dist.log_prob(perms.float())).to(device)
 
                 with torch.set_grad_enabled(phase == "train"):
                     outputs = model(inputs)
-                    outputs = outputs.reshape(-1, num_classes)
+                    outputs = F.log_softmax(outputs, dim=1)
                     loss = criterion(outputs, labels)
 
                 if phase == "train":
@@ -53,12 +55,14 @@ def ssl_train(device, model, dataloaders, args):
                     loss.backward()
                     optimiser.step()
                 else:
-                    preds = torch.argmax(outputs, dim=1)
-                    running_corrects += torch.sum(preds == labels).item()
-                    accuracy_total += labels.numel()
+                    indices = torch.argsort(outputs, dim=1, descending=True)
+                    ranks = torch.arange(num_classes, device=device).expand_as(indices)
+                    preds = torch.empty_like(indices).scatter_(1, indices, ranks).cpu()
+                    running_corrects += torch.sum(preds == perms).item()
+                    accuracy_total += perms.numel()
 
-                running_loss += loss.item() * labels.numel()
-                loss_total += labels.numel()
+                running_loss += loss.item() * inputs.size(0)
+                loss_total += inputs.size(0)
 
             epoch_loss = running_loss / loss_total
             utils.logger.info(f"Epoch {epoch}: {phase} loss = {epoch_loss}")

@@ -12,7 +12,6 @@ from torch.utils.data import DataLoader, Subset
 import models
 import sl_train
 import train
-import utils
 from data import SSLTrainDataset, SSLValDataset
 
 # mean and std for STL-10 Unlabeled train split
@@ -103,18 +102,12 @@ def main():
         np.random.seed(0)
         torch.backends.cudnn.deterministic = True
 
-    # os.makedirs(args.model_dir, exist_ok=True)
+    os.makedirs(args.model_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     input_transforms = transforms.Compose([transforms.ToTensor(),
                                            transforms.Normalize(mean, std)])
 
     model = models.ResNet18(args.num_patches, args.num_angles)
-    # model = models.AlexnetBN(args.num_patches, args.num_angles)
-    # model = models.ResNet50(args.num_patches, args.num_angles)
-    # model = models.SimpleConv(args.num_patches, args.num_angles)
-    # model = models.DRN_A_18(args.num_patches, args.num_angles)
-    # model = models.VGG11(args.num_patches, args.num_angles)
-    # model = models.ResNext50(args.num_patches, args.num_angles)
     model = torch.nn.DataParallel(model)
 
     if args.do_ssl:
@@ -135,18 +128,18 @@ def main():
                 shuffle=False, batch_size=args.ssl_val_batch_size, pin_memory=True)
         }
 
-        checkpoint = torch.load(os.path.join(args.model_dir, f"{args.model_name}"),
-                                map_location=lambda storage, loc: storage.cuda(0))
-        model.load_state_dict(checkpoint['state_dict'])
+        # checkpoint = torch.load(os.path.join(args.model_dir, f"{args.model_name}"),
+        #                         map_location=lambda storage, loc: storage.cuda(0))
+        # model.load_state_dict(checkpoint['state_dict'])
         # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{args.model_name}")))
         # dataloaders["train"].dataset.set_poisson_rate(args.poisson_rate)
         args.mean, args.std = mean, std
         # train.gen_grad_map(device, model, dataloaders["val"], args)
 
         model, best_val_accuracy = train.ssl_train(device, model, dataloaders, args)
-        # model_name = time.ctime().replace(" ", "_").replace(":", "_")
-        # model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
-        # torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))
+        model_name = time.ctime().replace(" ", "_").replace(":", "_")
+        model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
+        torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))
 
     if args.do_sl:
         if args.model_name is None:
