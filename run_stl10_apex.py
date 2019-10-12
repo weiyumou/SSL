@@ -208,9 +208,10 @@ def main():
                                 num_workers=args.workers, pin_memory=True, sampler=val_sampler, collate_fn=fast_collate)
 
         if args.evaluate:
-            val_loss, val_acc = apex_validate(val_loader, model, criterion, args)
+            rot_val_loss, rot_val_acc, perm_val_loss, perm_val_acc = apex_validate(val_loader, model, criterion, args)
             if args.is_master:
-                utils.logger.info(f"Val Loss = {val_loss}, Val Accuracy = {val_acc}")
+                utils.logger.info(f"Rot Val Loss = {rot_val_loss}, Rot Val Accuracy = {rot_val_acc}")
+                utils.logger.info(f"Perm Val Loss = {perm_val_loss}, Perm Val Accuracy = {perm_val_acc}")
             return
 
         # Create dir to save model and command-line args
@@ -227,18 +228,20 @@ def main():
                 train_sampler.set_epoch(epoch)
 
             # train for one epoch
-            train_loss, train_acc = apex_train(train_loader, model, criterion, optimiser, args, epoch)
+            rot_train_loss, rot_train_acc, perm_train_loss, perm_train_acc = apex_train(train_loader, model, criterion,
+                                                                                        optimiser, args, epoch)
 
             # evaluate on validation set
-            val_loss, val_acc = apex_validate(val_loader, model, criterion, args)
+            rot_val_loss, rot_val_acc, perm_val_loss, perm_val_acc = apex_validate(val_loader, model, criterion, args)
 
             if (epoch + 1) % args.learn_prd == 0:
-                utils.adj_poisson_rate(train_loader, args)
+                args.poisson_rate += 1
+                train_loader.dataset.set_poisson_rate(args.poisson_rate)
 
             # remember best Acc and save checkpoint
             if args.is_master:
-                is_best = val_acc > best_acc
-                best_acc = max(val_acc, best_acc)
+                is_best = perm_val_acc > best_acc
+                best_acc = max(perm_val_acc, best_acc)
                 save_checkpoint({
                     'epoch': epoch + 1,
                     'state_dict': model.state_dict(),
@@ -247,8 +250,10 @@ def main():
                     "poisson_rate": args.poisson_rate
                 }, is_best, model_dir)
 
-                writer.add_scalars("Loss", {"train_loss": train_loss, "val_loss": val_loss}, epoch)
-                writer.add_scalars("Accuracy", {"train_acc": train_acc, "val_acc": val_acc}, epoch)
+                writer.add_scalars("Rot_Loss", {"train_loss": rot_train_loss, "val_loss": rot_val_loss}, epoch)
+                writer.add_scalars("Perm_Loss", {"train_loss": perm_train_loss, "val_loss": perm_val_loss}, epoch)
+                writer.add_scalars("Rot_Accuracy", {"train_acc": rot_train_acc, "val_acc": rot_val_acc}, epoch)
+                writer.add_scalars("Perm_Accuracy", {"train_acc": perm_train_acc, "val_acc": perm_val_acc}, epoch)
                 writer.add_scalar("Poisson_Rate", train_loader.dataset.pdist.rate, epoch)
 
 

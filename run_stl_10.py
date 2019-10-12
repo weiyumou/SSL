@@ -103,7 +103,7 @@ def main():
         np.random.seed(0)
         torch.backends.cudnn.deterministic = True
 
-    os.makedirs(args.model_dir, exist_ok=True)
+    # os.makedirs(args.model_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     input_transforms = transforms.Compose([transforms.ToTensor(),
                                            transforms.Normalize(mean, std)])
@@ -135,15 +135,18 @@ def main():
                 shuffle=False, batch_size=args.ssl_val_batch_size, pin_memory=True)
         }
 
+        checkpoint = torch.load(os.path.join(args.model_dir, f"{args.model_name}"),
+                                map_location=lambda storage, loc: storage.cuda(0))
+        model.load_state_dict(checkpoint['state_dict'])
         # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{args.model_name}")))
         # dataloaders["train"].dataset.set_poisson_rate(args.poisson_rate)
-        # args.mean, args.std = mean, std
+        args.mean, args.std = mean, std
         # train.gen_grad_map(device, model, dataloaders["val"], args)
 
         model, best_val_accuracy = train.ssl_train(device, model, dataloaders, args)
-        model_name = time.ctime().replace(" ", "_").replace(":", "_")
-        model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
-        torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))
+        # model_name = time.ctime().replace(" ", "_").replace(":", "_")
+        # model_name = f"{model_name}_{best_val_accuracy:.4f}.pt"
+        # torch.save(model.state_dict(), os.path.join(args.model_dir, model_name))
 
     if args.do_sl:
         if args.model_name is None:
@@ -163,15 +166,19 @@ def main():
                                   download=args.download)
         dataloaders = {"test": DataLoader(stl_test, shuffle=False, batch_size=args.test_batch_size, pin_memory=True)}
 
-        model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{args.model_name}")))
-        model.init_classifier(args.num_classes, freeze_params=False)
+        checkpoint = torch.load(os.path.join(args.model_dir, f"{args.model_name}"),
+                                map_location=lambda storage, loc: storage.cuda(0))
+        model.load_state_dict(checkpoint['state_dict'])
+        # model.load_state_dict(torch.load(os.path.join(args.model_dir, f"{args.model_name}")))
+        # model.init_classifier(args.num_classes, freeze_params=False)
 
-        # query_img, _ = stl_train[-3]
-        # dataloader = DataLoader(stl_train, batch_size=128, shuffle=False, pin_memory=True)
-        # top_images, top_labels = train.retrieve_topk_images(device, model, query_img, dataloader, mean, std)
+        args.mean, args.std = mean, std
+        query_img, _ = stl_train[-1]
+        dataloader = DataLoader(stl_train, batch_size=128, shuffle=False, pin_memory=True)
+        top_images, top_labels = train.retrieve_topk_images(device, model, query_img, dataloader, args)
 
-        avg_test_accuracy = sl_train.stl_sl_train(device, model, stl_train, fold_indices, dataloaders, args)
-        utils.logger.info(f"Average Test Accuracy = {avg_test_accuracy}")
+        # avg_test_accuracy = sl_train.stl_sl_train(device, model, stl_train, fold_indices, dataloaders, args)
+        # utils.logger.info(f"Average Test Accuracy = {avg_test_accuracy}")
 
 
 if __name__ == '__main__':

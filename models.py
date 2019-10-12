@@ -9,6 +9,23 @@ class Flatten(nn.Module):
         return torch.flatten(x, start_dim=1)
 
 
+class TwoHeadedFC(nn.Module):
+
+    def __init__(self, fc_in, fc1_out, fc2_out):
+        super(TwoHeadedFC, self).__init__()
+        self.fc1 = nn.Linear(in_features=fc_in, out_features=fc1_out)
+        self.fc2 = nn.Linear(in_features=fc_in, out_features=fc2_out)
+        nn.init.normal_(self.fc1.weight, 0, 0.01)
+        nn.init.constant_(self.fc1.bias, 0)
+        nn.init.normal_(self.fc2.weight, 0, 0.01)
+        nn.init.constant_(self.fc2.bias, 0)
+
+    def forward(self, x):
+        fc1_out = self.fc1(x)
+        fc2_out = self.fc2(x)
+        return fc1_out, fc2_out
+
+
 class ResNet18(nn.Module):
 
     def __init__(self, num_patches, num_angles):
@@ -21,7 +38,7 @@ class ResNet18(nn.Module):
             nn.Linear(in_features=512, out_features=1024, bias=False),
             nn.BatchNorm1d(num_features=1024),
             nn.ReLU(),
-            nn.Linear(in_features=1024, out_features=num_patches * num_angles)
+            TwoHeadedFC(fc_in=1024, fc1_out=num_patches * num_angles, fc2_out=num_patches * num_patches)
         )
         self._initialise_fc()
 

@@ -123,7 +123,7 @@ def random_rotate(images, num_patches, rotations, perms=None):
 
     patches = patches.reshape(n, -1, num_patches)
     images = F.fold(patches, output_size=img_h, kernel_size=patch_size, stride=patch_size)
-    return images, torch.flatten(rotations)
+    return images, torch.flatten(rotations), torch.flatten(perms)
 
 
 def fast_collate(batch):
@@ -155,17 +155,19 @@ class DataPrefetcher():
 
     def __next__(self):
         torch.cuda.current_stream().wait_stream(self.stream)
-        inputs, labels = self.preload()
+        inputs, rot_labels, perm_labels = self.preload()
         inputs.record_stream(torch.cuda.current_stream())
-        labels.record_stream(torch.cuda.current_stream())
-        return inputs, labels
+        rot_labels.record_stream(torch.cuda.current_stream())
+        perm_labels.record_stream(torch.cuda.current_stream())
+        return inputs, rot_labels, perm_labels
 
     def preload(self):
         images, rotations, perms = next(self.loader)
         with torch.no_grad():
-            inputs, labels = random_rotate(images, self.num_patches, rotations, perms)
+            inputs, rot_labels, perm_labels = random_rotate(images, self.num_patches, rotations, perms)
         with torch.cuda.stream(self.stream):
             inputs = inputs.cuda(non_blocking=True)
-            labels = labels.cuda(non_blocking=True)
+            rot_labels = rot_labels.cuda(non_blocking=True)
+            perm_labels = perm_labels.cuda(non_blocking=True)
             inputs = inputs.sub(self.mean).div(self.std)
-        return inputs, labels
+        return inputs, rot_labels, perm_labels
